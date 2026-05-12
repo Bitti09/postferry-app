@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
 	import { downloadAndCacheMedia, getAllMediaUrls, isMediaCached } from '$lib/stores/db';
@@ -21,12 +21,18 @@
 
 	let activeAccount = $derived($accounts.find((a) => a.active));
 
+	let initialSearchDone = $state(false);
+
 	// Handle initial query from URL
 	$effect(() => {
 		const q = $page.url.searchParams.get('q');
-		if (q && q !== query) {
-			query = q;
-			performSearch(true);
+		if (q && activeAccount && !initialSearchDone) {
+			untrack(() => {
+				console.log(`[Search Debug] Initial URL query found: "${q}". activeAccount is ${activeAccount.blogName}. Performing search.`);
+				query = q;
+				initialSearchDone = true;
+				performSearch(true);
+			});
 		}
 	});
 
@@ -66,8 +72,15 @@
 	}
 
 	async function performSearch(reset = false) {
-		if (!activeAccount || !query) return;
-		if (loading) return;
+		console.log(`[Search Debug] performSearch() called. reset=${reset}, query="${query}", loading=${loading}, activeAccount=${activeAccount?.blogName}`);
+		if (!activeAccount || !query) {
+			console.log(`[Search Debug] Aborting: Missing activeAccount or query.`);
+			return;
+		}
+		if (loading) {
+			console.log(`[Search Debug] Aborting: Already loading.`);
+			return;
+		}
 
 		if (reset) {
 			posts = [];
@@ -76,10 +89,14 @@
 			error = '';
 		}
 
-		if (!hasMore) return;
+		if (!hasMore) {
+			console.log(`[Search Debug] Aborting: hasMore is false.`);
+			return;
+		}
 		loading = true;
 
 		try {
+			console.log(`[Search Debug] Sending request to /api/search with query="${query}", before=${paginationValue}, type=${currentFilter}`);
 			const res = await fetch('/api/search', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -91,24 +108,27 @@
 				})
 			});
 
-			if (!res.ok) throw new Error('Search failed');
+			if (!res.ok) {
+				const errText = await res.text();
+				console.error(`[Search Debug] Request failed with status ${res.status}:`, errText);
+				throw new Error('Search failed: ' + errText);
+			}
 			const newPosts = await res.json();
+			console.log(`[Search Debug] Received ${newPosts.length} posts from API.`);
 
 			if (newPosts.length === 0) {
 				hasMore = false;
+				console.log(`[Search Debug] hasMore set to false because 0 posts were returned.`);
 			} else {
 				posts = [...posts, ...newPosts];
 				
-				// Tag search uses timestamp (or featured_timestamp if available)
-				if (query.startsWith('#')) {
-					const lastPost = newPosts[newPosts.length - 1];
-					paginationValue = lastPost.featured_timestamp || lastPost.timestamp;
-				} else {
-					// Global search uses offset (current count)
-					paginationValue = posts.length;
-				}
+				// All searches are now tag searches, use timestamp
+				const lastPost = newPosts[newPosts.length - 1];
+				paginationValue = lastPost.featured_timestamp || lastPost.timestamp;
+				console.log(`[Search Debug] Pagination updated to timestamp: ${paginationValue}`);
 			}
 		} catch (err: any) {
+			console.error(`[Search Debug] Caught error during search:`, err);
 			error = err.message;
 		} finally {
 			loading = false;
@@ -130,7 +150,7 @@
 				<Search size={32} class="text-blue-500" />
 				Search
 			</h1>
-			<p class="text-gray-400 mt-1">Search tags and posts on Tumblr.</p>
+			<p class="text-gray-400 mt-1">Search Tumblr tags. <span class="text-blue-400/80 text-xs font-bold block mt-1 uppercase tracking-wider">Note: Global keyword search is unsupported by the Tumblr API.</span></p>
 		</div>
 
 		<!-- Central Search Bar -->

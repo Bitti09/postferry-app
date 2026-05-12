@@ -1,45 +1,92 @@
 <script lang="ts">
-	import { onMount, tick, untrack } from 'svelte';
-	import { browser } from '$app/environment';
-	import { accounts } from '$lib/stores/accounts';
-	import { downloadAndCacheMedia, getAllMediaUrls, isMediaCached } from '$lib/stores/db';
-	import PostCard from '$lib/components/PostCard.svelte';
-	import LazyRender from '$lib/components/LazyRender.svelte';
-	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { Heart, User, Download, Loader2, Play, Home, Search } from 'lucide-svelte';
+	import { onMount, tick, untrack } from "svelte";
+	import { browser } from "$app/environment";
+	import { accounts } from "$lib/stores/accounts";
+	import {
+		downloadAndCacheMedia,
+		getAllMediaUrls,
+		isMediaCached,
+	} from "$lib/stores/db";
+	import PostCard from "$lib/components/PostCard.svelte";
+	import LazyRender from "$lib/components/LazyRender.svelte";
+	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
+	import Slideshow from "$lib/components/Slideshow.svelte";
+	import {
+		Heart,
+		User,
+		Download,
+		Loader2,
+		Play,
+		Home,
+		Search,
+	} from "lucide-svelte";
 
 	let likes: any[] = $state([]);
 	let loading = $state(false);
 	let hasMore = $state(true);
 	let accountOffsets: Record<string, number> = $state({});
-	let error = $state('');
+	let error = $state("");
 	let isOffline = $state(false);
 	let slideshowActive = $state(false);
-	
-	let currentFilter = $state('all');
+
+	let currentFilter = $state("all");
 
 	let activeAccounts = $derived($accounts.filter((a) => a.active));
-	
-	let filteredLikes = $derived(likes.filter(post => {
-		if (currentFilter === 'all') return true;
-		
-		// Check top-level type first
-		if (post.type === currentFilter) return true;
 
-		// Check for specific content blocks in NPF (Dashboard often returns link posts as 'text')
-		const blocks = [...(post.content || []), ...(post.trail || []).flatMap((t: any) => t.content || [])];
-		
-		if (currentFilter === 'photo') return blocks.some((b: any) => b.type === 'image');
-		if (currentFilter === 'video') return blocks.some((b: any) => b.type === 'video');
-		if (currentFilter === 'audio') return blocks.some((b: any) => b.type === 'audio');
-		if (currentFilter === 'link') return blocks.some((b: any) => b.type === 'link');
-		if (currentFilter === 'quote') return blocks.some((b: any) => b.subtype === 'quote');
-		if (currentFilter === 'chat') return blocks.some((b: any) => b.subtype === 'chat');
-		if (currentFilter === 'answer') return post.layout?.some((l: any) => l.type === 'ask');
-		
-		return post.type === currentFilter;
-	}));
+	let initialMount = $state(true);
+	let prevAccountsStr = $state("");
+	let prevFilterStr = $state("");
+
+	export const snapshot = {
+		capture: () => ({
+			likes,
+			accountOffsets,
+			hasMore,
+			currentFilter,
+			prevAccountsStr,
+			prevFilterStr,
+		}),
+		restore: (value: any) => {
+			likes = value.likes || [];
+			accountOffsets = value.accountOffsets || {};
+			hasMore = value.hasMore ?? true;
+			currentFilter = value.currentFilter || "all";
+			prevAccountsStr = value.prevAccountsStr || "";
+			prevFilterStr = value.prevFilterStr || "";
+		},
+	};
+
+	let filteredLikes = $derived(
+		likes.filter((post) => {
+			if (currentFilter === "all") return true;
+
+			// Check top-level type first
+			if (post.type === currentFilter) return true;
+
+			// Check for specific content blocks in NPF (Dashboard often returns link posts as 'text')
+			const blocks = [
+				...(post.content || []),
+				...(post.trail || []).flatMap((t: any) => t.content || []),
+			];
+
+			if (currentFilter === "photo")
+				return blocks.some((b: any) => b.type === "image");
+			if (currentFilter === "video")
+				return blocks.some((b: any) => b.type === "video");
+			if (currentFilter === "audio")
+				return blocks.some((b: any) => b.type === "audio");
+			if (currentFilter === "link")
+				return blocks.some((b: any) => b.type === "link");
+			if (currentFilter === "quote")
+				return blocks.some((b: any) => b.subtype === "quote");
+			if (currentFilter === "chat")
+				return blocks.some((b: any) => b.subtype === "chat");
+			if (currentFilter === "answer")
+				return post.layout?.some((l: any) => l.type === "ask");
+
+			return post.type === currentFilter;
+		}),
+	);
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
@@ -47,14 +94,14 @@
 	async function cacheAllVisible() {
 		if (downloadingAll) return;
 		downloadingAll = true;
-		
+
 		const allUrls = new Set<string>();
 		for (const post of filteredLikes) {
 			for (const url of getAllMediaUrls(post)) {
 				allUrls.add(url);
 			}
 		}
-		
+
 		const urlsToDownload: string[] = [];
 		for (const url of Array.from(allUrls)) {
 			if (!(await isMediaCached(url))) {
@@ -67,14 +114,16 @@
 			downloadingAll = false;
 			return;
 		}
-		
+
 		const BATCH = 4;
 		for (let i = 0; i < urlsToDownload.length; i += BATCH) {
 			const batch = urlsToDownload.slice(i, i + BATCH);
-			await Promise.all(batch.map(async (url) => {
-				await downloadAndCacheMedia(url);
-				downloadProgress.done++;
-			}));
+			await Promise.all(
+				batch.map(async (url) => {
+					await downloadAndCacheMedia(url);
+					downloadProgress.done++;
+				}),
+			);
 		}
 		downloadingAll = false;
 	}
@@ -101,16 +150,16 @@
 		loading = true;
 
 		try {
-			const res = await fetch('/api/user/likes', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ 
-					accounts: activeAccounts, 
-					before: accountOffsets
-				})
+			const res = await fetch("/api/user/likes", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					accounts: activeAccounts,
+					before: accountOffsets,
+				}),
 			});
 
-			if (!res.ok) throw new Error('Failed to load likes');
+			if (!res.ok) throw new Error("Failed to load likes");
 
 			const data = await res.json();
 			const newLikes = data.liked_posts;
@@ -120,8 +169,10 @@
 				hasMore = false;
 			} else {
 				const existingIds = new Set(likes.map((p) => p.id));
-				const uniqueNew = newLikes.filter((p: any) => !existingIds.has(p.id));
-				
+				const uniqueNew = newLikes.filter(
+					(p: any) => !existingIds.has(p.id),
+				);
+
 				if (uniqueNew.length === 0 && newLikes.length > 0) {
 					// All duplicates, but we might have more pages
 				} else if (uniqueNew.length === 0) {
@@ -140,13 +191,32 @@
 
 	// Reactive reload when active accounts or filter change
 	$effect(() => {
-		// Explicit dependencies
-		const deps = { accounts: activeAccounts, filter: currentFilter };
-		
+		const currentAccountsStr = activeAccounts
+			.map((a) => a.blogName)
+			.sort()
+			.join(",");
+		const currentFilterVal = currentFilter;
+
 		untrack(() => {
 			if (browser) {
+				if (initialMount) {
+					initialMount = false;
+					if (
+						likes.length > 0 &&
+						currentAccountsStr === prevAccountsStr &&
+						currentFilterVal === prevFilterStr
+					) {
+						return; // Skip reload on initial mount if snapshot was restored and matches
+					}
+				}
+
+				prevAccountsStr = currentAccountsStr;
+				prevFilterStr = currentFilterVal;
+
 				if (activeAccounts.length > 0) {
-					console.log(`[Favourites] Refreshing for ${activeAccounts.length} accounts...`);
+					console.log(
+						`[Favourites] Refreshing for ${activeAccounts.length} accounts...`,
+					);
 					loadLikes(true);
 				} else {
 					// Clear results
@@ -166,25 +236,46 @@
 	onMount(() => {
 		if (browser) {
 			isOffline = !navigator.onLine;
-			window.addEventListener('online', () => { isOffline = false; loadLikes(); });
-			window.addEventListener('offline', () => isOffline = true);
+			window.addEventListener("online", () => {
+				isOffline = false;
+				loadLikes();
+			});
+			window.addEventListener("offline", () => (isOffline = true));
 		}
-
-		if (activeAccounts.length > 0 && !isOffline) loadLikes();
 	});
 </script>
 
 <div class="min-h-screen p-4 md:p-8 bg-black">
 	{#if isOffline}
 		<div class="alert alert-warning shadow-lg mb-6">
-			<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-			<span>You are offline. Only the <a href="/caches" class="font-bold underline text-primary">Media Cache</a> is available right now.</span>
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				class="stroke-current shrink-0 h-6 w-6"
+				fill="none"
+				viewBox="0 0 24 24"
+				><path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					stroke-width="2"
+					d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+				/></svg
+			>
+			<span
+				>You are offline. Only the <a
+					href="/caches"
+					class="font-bold underline text-primary">Media Cache</a
+				> is available right now.</span
+			>
 		</div>
 	{/if}
 
-	<header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+	<header
+		class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+	>
 		<div>
-			<h1 class="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
+			<h1
+				class="text-3xl font-bold text-white tracking-tight flex items-center gap-3"
+			>
 				<Heart size={32} class="text-pink-500" />
 				Your Favourites
 			</h1>
@@ -196,12 +287,17 @@
 				{#each $accounts as account}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div 
+					<div
 						role="button"
 						tabindex="0"
-						class="badge badge-lg gap-2 cursor-pointer transition-colors {account.active ? 'badge-primary' : 'badge-ghost'}" 
+						class="badge badge-lg gap-2 cursor-pointer transition-colors {account.active
+							? 'badge-primary'
+							: 'badge-ghost'}"
 						onclick={() => toggleAccount(account.blogName)}
-						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleAccount(account.blogName); }}
+						onkeydown={(e) => {
+							if (e.key === "Enter" || e.key === " ")
+								toggleAccount(account.blogName);
+						}}
 					>
 						<User size={14} />
 						{account.blogName}
@@ -210,26 +306,91 @@
 			</div>
 
 			<div class="flex items-center gap-4">
-				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap">
-					<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'all'; }}>All</button>
-					<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'photo'; }}>Photos</button>
-					<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'video'; }}>Videos</button>
-					<button class="tab {currentFilter === 'audio' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'audio'; }}>Audio</button>
-					<button class="tab {currentFilter === 'quote' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'quote'; }}>Quotes</button>
-					<button class="tab {currentFilter === 'link' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'link'; }}>Links</button>
-					<button class="tab {currentFilter === 'chat' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'chat'; }}>Chat</button>
-					<button class="tab {currentFilter === 'answer' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'answer'; }}>Asks</button>
-					<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'text'; }}>Text</button>
+				<div
+					class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap"
+				>
+					<button
+						class="tab {currentFilter === 'all'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "all";
+						}}>All</button
+					>
+					<button
+						class="tab {currentFilter === 'photo'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "photo";
+						}}>Photos</button
+					>
+					<button
+						class="tab {currentFilter === 'video'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "video";
+						}}>Videos</button
+					>
+					<button
+						class="tab {currentFilter === 'audio'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "audio";
+						}}>Audio</button
+					>
+					<button
+						class="tab {currentFilter === 'quote'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "quote";
+						}}>Quotes</button
+					>
+					<button
+						class="tab {currentFilter === 'link'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "link";
+						}}>Links</button
+					>
+					<button
+						class="tab {currentFilter === 'chat'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "chat";
+						}}>Chat</button
+					>
+					<button
+						class="tab {currentFilter === 'answer'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "answer";
+						}}>Asks</button
+					>
+					<button
+						class="tab {currentFilter === 'text'
+							? 'tab-active bg-primary text-white'
+							: 'text-gray-400'}"
+						onclick={() => {
+							currentFilter = "text";
+						}}>Text</button
+					>
 				</div>
 				<div class="flex items-center gap-2">
-					<button 
+					<button
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-						onclick={() => slideshowActive = true}
+						onclick={() => (slideshowActive = true)}
 						disabled={filteredLikes.length === 0}
 					>
 						<Play size={16} /> Play Slideshow
 					</button>
-					<button 
+					<button
 						class="btn btn-sm btn-primary gap-2"
 						onclick={cacheAllVisible}
 						disabled={downloadingAll || isOffline}
@@ -247,10 +408,14 @@
 	</header>
 
 	{#if downloadingAll}
-		<div class="mb-6 bg-gray-900 rounded-full h-2 overflow-hidden border border-gray-800">
-			<div 
+		<div
+			class="mb-6 bg-gray-900 rounded-full h-2 overflow-hidden border border-gray-800"
+		>
+			<div
 				class="h-full bg-primary transition-all duration-300 rounded-full"
-				style="width: {downloadProgress.total > 0 ? (downloadProgress.done / downloadProgress.total * 100) : 0}%"
+				style="width: {downloadProgress.total > 0
+					? (downloadProgress.done / downloadProgress.total) * 100
+					: 0}%"
 			></div>
 		</div>
 	{/if}
@@ -269,7 +434,9 @@
 				No favourited posts match the current filter.
 			</div>
 		{:else}
-			<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+			<main
+				class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max"
+			>
 				{#each filteredLikes as post (post.id)}
 					<LazyRender>
 						<PostCard {post} />
@@ -282,8 +449,10 @@
 	{/if}
 </div>
 
-<Slideshow 
-	bind:active={slideshowActive} 
-	posts={filteredLikes} 
-	onReachEnd={async () => { await loadLikes(); }} 
+<Slideshow
+	bind:active={slideshowActive}
+	posts={filteredLikes}
+	onReachEnd={async () => {
+		await loadLikes();
+	}}
 />
