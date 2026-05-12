@@ -1,0 +1,170 @@
+<script lang="ts">
+	import { page } from '$app/stores';
+	import { onMount } from 'svelte';
+	import { accounts } from '$lib/stores/accounts';
+	import PostCard from '$lib/components/PostCard.svelte';
+	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
+	import { ArrowLeft, Heart } from 'lucide-svelte';
+
+	let blogName = $page.params.blogName;
+	
+	let info: any = $state(null);
+	let posts: any[] = $state([]);
+	let loadingInfo = $state(true);
+	let loadingPosts = $state(false);
+	let hasMore = $state(true);
+	let beforeId: number | null = $state(null);
+	let error = $state('');
+	
+	let currentFilter = $state('all'); // all, photo, video, text
+
+	let activeAccount = $derived($accounts.find((a) => a.active));
+
+	let filteredPosts = $derived(posts.filter(post => {
+		if (currentFilter === 'all') return true;
+		if (currentFilter === 'photo') return post.type === 'photo';
+		if (currentFilter === 'video') return post.type === 'video';
+		if (currentFilter === 'text') return post.type === 'text';
+		return true;
+	}));
+
+	onMount(async () => {
+		if (!activeAccount) {
+			error = 'No active account. Please activate an account to view details.';
+			loadingInfo = false;
+			return;
+		}
+
+		// Fetch Info
+		try {
+			const resInfo = await fetch('/api/blog/info', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ account: activeAccount, blogName })
+			});
+			if (resInfo.ok) {
+				const data = await resInfo.json();
+				info = data.info;
+			}
+		} catch (e) {
+			console.error(e);
+		} finally {
+			loadingInfo = false;
+		}
+
+		// Initial load of posts
+		loadPosts();
+	});
+
+	async function loadPosts() {
+		if (!activeAccount || loadingPosts || !hasMore) return;
+		loadingPosts = true;
+
+		try {
+			const res = await fetch('/api/blog/posts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ account: activeAccount, blogName, before_id: beforeId })
+			});
+
+			if (!res.ok) throw new Error('Failed to load posts');
+
+			const data = await res.json();
+			const newPosts = data.posts;
+
+			if (!newPosts || newPosts.length === 0) {
+				hasMore = false;
+			} else {
+				const existingIds = new Set(posts.map((p) => p.id));
+				const uniqueNew = newPosts.filter((p: any) => !existingIds.has(p.id));
+				
+				if (uniqueNew.length === 0) {
+					hasMore = false;
+				} else {
+					posts = [...posts, ...uniqueNew];
+					beforeId = Math.min(...uniqueNew.map((p: any) => p.id));
+				}
+			}
+		} catch (err: any) {
+			error = err.message;
+		} finally {
+			loadingPosts = false;
+		}
+	}
+</script>
+
+<div class="min-h-screen p-4 md:p-8">
+	<a href="/" class="btn btn-ghost mb-6 gap-2 text-white">
+		<ArrowLeft size={20} /> Back to Dashboard
+	</a>
+
+	{#if error}
+		<div class="alert alert-error">{error}</div>
+	{/if}
+
+	<!-- Blog Header -->
+	{#if loadingInfo}
+		<div class="flex justify-center py-10">
+			<span class="loading loading-spinner text-primary"></span>
+		</div>
+	{:else if info}
+		<div class="bg-gray-900 rounded-3xl p-6 md:p-10 mb-8 shadow-xl flex flex-col md:flex-row gap-8 items-start">
+			<div class="avatar">
+				<div class="w-32 rounded-xl">
+					<img src={info.avatar[0]?.url || `https://api.tumblr.com/v2/blog/${blogName}/avatar/128`} alt="Avatar" />
+				</div>
+			</div>
+			
+			<div class="flex-1">
+				<h1 class="text-4xl font-bold text-white tracking-tight">{info.title || info.name}</h1>
+				<p class="text-gray-400 mt-1">@{info.name}</p>
+				
+				{#if info.description}
+					<div class="mt-4 prose prose-invert prose-sm">
+						{@html info.description}
+					</div>
+				{/if}
+
+				<div class="mt-6 flex flex-wrap gap-4">
+					<div class="stat bg-gray-800 rounded-2xl w-auto px-6 py-2">
+						<div class="stat-title">Posts</div>
+						<div class="stat-value text-2xl">{info.posts}</div>
+					</div>
+					
+					{#if info.likes > 0}
+						<a href={`/blog/${blogName}/likes`} class="stat bg-gray-800 rounded-2xl w-auto px-6 py-2 hover:bg-gray-700 transition-colors cursor-pointer group">
+							<div class="stat-title group-hover:text-pink-400 transition-colors">Favourites</div>
+							<div class="stat-value text-2xl flex items-center gap-2">
+								{info.likes} <Heart size={18} class="text-pink-500 hidden group-hover:block" />
+							</div>
+						</a>
+					{/if}
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Posts Grid -->
+	<div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between mb-6">
+		<h2 class="text-2xl font-bold text-white">Recent Posts</h2>
+		<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
+			<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
+			<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
+			<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
+			<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+		</div>
+	</div>
+	<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+		{#each filteredPosts as post (post.id)}
+			<PostCard {post} />
+		{/each}
+	</main>
+
+	{#if filteredPosts.length === 0 && posts.length > 0}
+		<div class="py-20 text-center text-gray-500">
+			No posts match the current filter.
+		</div>
+	{/if}
+
+	<InfiniteScroll {hasMore} loading={loadingPosts} onload={loadPosts} />
+</div>
