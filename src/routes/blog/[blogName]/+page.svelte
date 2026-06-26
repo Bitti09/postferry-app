@@ -29,6 +29,16 @@
 	}));
 
 	onMount(async () => {
+		// Accounts load async from IndexedDB; wait for them before proceeding
+		if ($accounts.length === 0) {
+			// Wait briefly for accounts to load from IndexedDB, retry up to 2s
+			let attempts = 0;
+			while ($accounts.length === 0 && attempts < 20) {
+				await new Promise(r => setTimeout(r, 100));
+				attempts++;
+			}
+		}
+
 		if (!activeAccount) {
 			error = 'No active account. Please activate an account to view details.';
 			loadingInfo = false;
