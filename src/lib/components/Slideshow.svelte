@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { PlayCircle, X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
-	import { getAllMediaUrls, getCachedBlobUrl } from '$lib/stores/db';
+	import { getAllMediaUrls } from '$lib/stores/db';
+	import { getCachedBlobUrl, bulkIsMediaCached } from '$lib/stores/db';
 	import { onMount, tick } from 'svelte';
 
 	let { 
@@ -22,8 +23,21 @@
 		displayUrl?: string; // Cache blob if available
 	};
 
-	// Instant synchronous flattening
-	let flatMedia = $derived(posts.flatMap(extractMedia));
+	// Incremental flattening - append only new posts, don't re-flatten all on every load
+	let flatMedia = $state<FlatMedia[]>([]);
+	let postCount = $state(0);
+	$effect(() => {
+		if (posts.length > postCount) {
+			const newPosts = posts.slice(postCount);
+			flatMedia.push(...newPosts.flatMap(extractMedia));
+			postCount = posts.length;
+		}
+		if (posts.length < postCount) {
+			// posts array was replaced (e.g. filter change)
+			flatMedia = posts.flatMap(extractMedia);
+			postCount = posts.length;
+		}
+	});
 	let blobMap = $state<Record<string, string>>({});
 
 	// Extract and flatten media from a post
@@ -48,19 +62,33 @@
 
 	let currentItem = $derived(flatMedia[currentIndex]);
 
-	// Background blob resolver
+	// Background blob resolver - batch pre-filter then fetch only cached, capped concurrency
+	let blobResolved = $state(false);
 	$effect(() => {
-		if (active) {
-			flatMedia.forEach(async (m) => {
-				if (!blobMap[m.url]) {
-					const cached = await getCachedBlobUrl(m.url);
-					if (cached) {
-						blobMap[m.url] = cached.url;
-					}
-				}
-			});
+		if (active && !blobResolved) {
+			blobResolved = true;
+			resolveBlobs();
+		}
+		if (!active) {
+			blobResolved = false;
 		}
 	});
+
+	async function resolveBlobs() {
+		const urls = flatMedia.map((m: FlatMedia) => m.url);
+		const cachedSet = await bulkIsMediaCached(urls);
+		const toFetch = urls.filter((u: string) => cachedSet.has(u));
+		const LIMIT = 8;
+		const queue: string[] = [...toFetch];
+		async function worker() {
+			while (queue.length) {
+				const url = queue.shift()!;
+				const cached = await getCachedBlobUrl(url);
+				if (cached) blobMap[url] = cached.url;
+			}
+		}
+		await Promise.all(Array.from({ length: Math.min(LIMIT, queue.length) }, () => worker()));
+	}
 
 	// Check if we need more posts
 	$effect(() => {

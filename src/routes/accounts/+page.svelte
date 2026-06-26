@@ -92,20 +92,23 @@
 				const entries = Array.from(urlMeta.entries());
 				const cachedSet = await bulkIsMediaCached(entries.map(([url]) => url));
 
-				await Promise.all(entries.map(async ([url, meta]) => {
-					const wasCached = cachedSet.has(url);
-					await downloadAndCacheMedia(url, meta);
-					
-					if (!wasCached) {
+				// Batch downloads with concurrency cap (reuse cacheAllVisible's approach)
+				const toDownload = entries.filter(([url]) => !cachedSet.has(url));
+				const BATCH = 4;
+				for (let i = 0; i < toDownload.length; i += BATCH) {
+					const batch = toDownload.slice(i, i + BATCH);
+					await Promise.all(batch.map(async ([url, meta]) => {
+						await downloadAndCacheMedia(url, meta);
 						if (downloadingFavs[account.blogName]) {
 							downloadingFavs[account.blogName].newMedia++;
 						}
-					} else {
-						if (downloadingFavs[account.blogName]) {
-							downloadingFavs[account.blogName].skippedMedia++;
-						}
-					}
-				}));
+					}));
+				}
+
+				// Count skipped
+				if (downloadingFavs[account.blogName]) {
+					downloadingFavs[account.blogName].skippedMedia += entries.filter(([url]) => cachedSet.has(url)).length;
+				}
 
 				downloadingFavs[account.blogName].fetchedPosts += posts.length;
 				

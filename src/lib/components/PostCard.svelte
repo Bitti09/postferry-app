@@ -17,11 +17,18 @@
 		onclickOverride?: () => void;
 	}>();
 
-	let mediaUrl = $derived(getPrimaryMediaUrl(post));
-	let allUrls = $derived(getAllMediaUrls(post));
+	let mediaInfo = $derived.by(() => {
+		const allUrls = getAllMediaUrls(post);
+		const videos = getVideoUrls(post);
+		const images = getImageUrls(post);
+		return {
+			primary: getPrimaryMediaUrl(post),
+			allUrls,
+			isVideo: videos.length > 0,
+			isImage: images.length > 0,
+		};
+	});
 
-	let isVideo = $derived(getVideoUrls(post).length > 0);
-	let isImage = $derived(getImageUrls(post).length > 0);
 	let nsfw = $derived(post.is_nsfw);
 
 	let isCached = $state(false);
@@ -33,12 +40,12 @@
 		if (checkPromise) return checkPromise;
 
 		checkPromise = (async () => {
-			if (allUrls.length === 0) {
+			if (mediaInfo.allUrls.length === 0) {
 				isCached = true;
 				return;
 			}
-			const cachedSet = await bulkIsMediaCached(allUrls);
-			isCached = allUrls.every((url) => cachedSet.has(url));
+			const cachedSet = await bulkIsMediaCached(mediaInfo.allUrls);
+			isCached = mediaInfo.allUrls.every((url: string) => cachedSet.has(url));
 		})();
 		return checkPromise.finally(() => { checkPromise = null; });
 	}
@@ -47,15 +54,15 @@
 		if (isDownloading || isCached) return;
 		isDownloading = true;
 
-		if (allUrls.length === 0) {
+		if (mediaInfo.allUrls.length === 0) {
 			isCached = true;
 			isDownloading = false;
 			return;
 		}
 
-		const cachedSet = await bulkIsMediaCached(allUrls);
-		const toDownload = allUrls.filter((url) => !cachedSet.has(url));
-		await Promise.all(toDownload.map((url) => downloadAndCacheMedia(url)));
+		const cachedSet = await bulkIsMediaCached(mediaInfo.allUrls);
+		const toDownload = mediaInfo.allUrls.filter((url: string) => !cachedSet.has(url));
+		await Promise.all(toDownload.map((url: string) => downloadAndCacheMedia(url)));
 
 		isDownloading = false;
 		isCached = true;
@@ -91,9 +98,9 @@
 	}}
 	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-[3/4] shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
 >
-	{#if mediaUrl}
+	{#if mediaInfo.primary}
 		<CachedMedia
-			url={mediaUrl}
+			url={mediaInfo.primary}
 			alt={post.summary || 'Tumblr Post'}
 			class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
 		/>
@@ -110,11 +117,11 @@
 	<!-- Top Left Icons -->
 	<div class="absolute top-3 left-3 flex items-center gap-2 z-10">
 		<!-- Video Icon -->
-		{#if isVideo}
+		{#if mediaInfo.isVideo}
 			<div class="text-white/80 drop-shadow-md">
 				<PlayCircle size={24} />
 			</div>
-		{:else if isImage}
+		{:else if mediaInfo.isImage}
 			<div class="text-white/80 drop-shadow-md">
 				<ImageIcon size={24} />
 			</div>
@@ -156,7 +163,7 @@
 		<div class="mt-3 flex items-center justify-between gap-1 text-xs text-gray-400 relative z-30">
 			<span class="truncate">{post.note_count || 0} notes</span>
 			
-			{#if !$settings.autoCacheMedia && !isCached && !isDownloading && allUrls.length > 0}
+			{#if !$settings.autoCacheMedia && !isCached && !isDownloading && mediaInfo.allUrls.length > 0}
 				<button
 					class="flex items-center gap-1 hover:text-white transition-colors p-1 shrink-0 whitespace-nowrap"
 					onclick={(e) => { e.preventDefault(); e.stopPropagation(); downloadPostMedia(); }}

@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
+	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
@@ -36,20 +37,8 @@
 		}
 	});
 
-	// Derived filtering logic (smart content check)
-	let filteredPosts = $derived(posts.filter(post => {
-		if (currentFilter === 'all') return true;
-		if (post.type === currentFilter) return true;
-		const blocks = [...(post.content || []), ...(post.trail || []).flatMap((t: any) => t.content || [])];
-		if (currentFilter === 'photo') return blocks.some((b: any) => b.type === 'image');
-		if (currentFilter === 'video') return blocks.some((b: any) => b.type === 'video');
-		if (currentFilter === 'audio') return blocks.some((b: any) => b.type === 'audio');
-		if (currentFilter === 'link') return blocks.some((b: any) => b.type === 'link');
-		if (currentFilter === 'quote') return blocks.some((b: any) => b.subtype === 'quote');
-		if (currentFilter === 'chat') return blocks.some((b: any) => b.subtype === 'chat');
-		if (currentFilter === 'answer') return post.layout?.some((l: any) => l.type === 'ask');
-		return post.type === currentFilter;
-	}));
+	// Derived filtering using shared postFilter utility
+	let filteredPosts = $derived(filterPosts(posts, currentFilter as PostFilter));
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });

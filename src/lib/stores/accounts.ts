@@ -13,6 +13,14 @@ export interface TumblrAccount {
 function createAccountsStore() {
 	const { subscribe, set, update }: Writable<TumblrAccount[]> = writable([]);
 
+	// Debounced persistence to avoid IDB writes on every single toggle
+	let saveTimer: ReturnType<typeof setTimeout> | null = null;
+	function scheduleSave(accounts: TumblrAccount[]) {
+		if (!browser) return;
+		if (saveTimer) clearTimeout(saveTimer);
+		saveTimer = setTimeout(() => setCachedAccounts(accounts), 300);
+	}
+
 	if (browser) {
 		// Initialize async from our Storage Bucket
 		getCachedAccounts().then(cached => {
@@ -34,13 +42,13 @@ function createAccountsStore() {
 				} else {
 					newAccounts = [...accounts, account];
 				}
-				if (browser) setCachedAccounts(newAccounts);
+				scheduleSave(newAccounts);
 				return newAccounts;
 			}),
 		removeAccount: (blogName: string) =>
 			update((accounts) => {
 				const newAccounts = accounts.filter((a) => a.blogName !== blogName);
-				if (browser) setCachedAccounts(newAccounts);
+				scheduleSave(newAccounts);
 				return newAccounts;
 			}),
 		toggleActive: (blogName: string) =>
@@ -48,7 +56,7 @@ function createAccountsStore() {
 				const newAccounts = accounts.map((a) =>
 					a.blogName === blogName ? { ...a, active: !a.active } : a
 				);
-				if (browser) setCachedAccounts(newAccounts);
+				scheduleSave(newAccounts);
 				return newAccounts;
 			})
 	};

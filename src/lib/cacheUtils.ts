@@ -1,4 +1,7 @@
 import { downloadAndCacheMedia, bulkIsMediaCached } from '$lib/stores/db';
+// NOTE: db.ts's downloadAndCacheMedia is used here. mediaCache.ts has an alternative
+// with an inFlight dedup Map and memory cache layer. Consider switching imports to
+// mediaCache.ts if you want in-flight deduplication and object URL caching.
 import { getAllMediaUrls } from '$lib/mediaUrls';
 import type { TumblrPost } from '$lib/types';
 

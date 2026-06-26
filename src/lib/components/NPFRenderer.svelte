@@ -54,6 +54,13 @@
 			? layout?.find((l: any) => l.type === "rows")
 			: null;
 		const rowDisplay = rowsLayout?.display || [];
+		// Pre-build O(1) row lookup map to avoid .find() inside the loop
+		const rowMap = new Map<number, any>();
+		for (const r of rowDisplay) {
+			for (const idx of (r.blocks || [])) {
+				rowMap.set(idx, r);
+			}
+		}
 
 		let currentCarousel: { type: string; images: any[] } | null = null;
 		let currentList: { type: string; subtype: string; blocks: any[] } | null = null;
@@ -82,10 +89,8 @@
 				currentList = null;
 			}
 
-			// Check if this block is part of a Row
-			const rowForIndex = rowDisplay.find((r: any) =>
-				r.blocks.includes(i),
-			);
+			// Check if this block is part of a Row (O(1) lookup via pre-built map)
+			const rowForIndex = rowMap.get(i);
 			if (rowForIndex) {
 				if (currentCarousel) { result.push(currentCarousel); currentCarousel = null; }
 

@@ -81,10 +81,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-
-		return new Response(JSON.stringify({ posts: sortedPosts }), {
-			headers: { 'Content-Type': 'application/json' }
-		});
 	} catch (error) {
 		console.error('Dashboard Error:', error);
 		return new Response('Internal Server Error', { status: 500 });

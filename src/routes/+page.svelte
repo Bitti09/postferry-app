@@ -159,10 +159,7 @@
 			window.addEventListener('online', () => { isOffline = false; loadPosts(false); });
 			window.addEventListener('offline', () => isOffline = true);
 		}
-
-		if (activeAccounts.length > 0 && !isOffline) {
-			loadPosts(true);
-		}
+		// $effect above handles initial load on activeAccounts/currentFilter change
 	});
 </script>
 
