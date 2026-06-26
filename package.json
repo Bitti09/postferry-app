@@ -20,6 +20,7 @@
 		"@types/node": "^25.7.0",
 		"@vite-pwa/sveltekit": "^1.1.0",
 		"daisyui": "^5.5.19",
+		"jimp": "^1.6.1",
 		"svelte": "^5.55.5",
 		"svelte-check": "^4.4.8",
 		"tailwindcss": "4.3.0",

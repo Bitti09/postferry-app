@@ -96,7 +96,7 @@
 		</div>
 	</header>
 
-	{#if error}
+	{#if error && (typeof navigator === 'undefined' || navigator.onLine)}
 		<div class="alert alert-error mb-6">{error}</div>
 	{/if}
 

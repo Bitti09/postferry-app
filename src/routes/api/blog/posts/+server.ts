@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 
@@ -23,6 +24,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			oauth.authorize(requestData, { key: account.token, secret: account.secret })
 		);
 
+		await checkRateLimit();
 		const res = await fetch(requestData.url, {
 			headers: { ...authHeader }
 		});

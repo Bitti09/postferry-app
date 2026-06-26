@@ -1,16 +1,14 @@
 <script lang="ts">
-	import { onMount, tick, untrack } from "svelte";
+	import { onMount, untrack } from "svelte";
 	import { browser } from "$app/environment";
 	import { accounts } from "$lib/stores/accounts";
-	import {
-		downloadAndCacheMedia,
-		getAllMediaUrls,
-		isMediaCached,
-	} from "$lib/stores/db";
+	import { cacheAllVisible } from "$lib/cacheUtils";
+	import { filterPosts, type PostFilter } from "$lib/postFilter";
 	import PostCard from "$lib/components/PostCard.svelte";
 	import LazyRender from "$lib/components/LazyRender.svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
 	import Slideshow from "$lib/components/Slideshow.svelte";
+	import type { TumblrPost, TumblrAccount } from "$lib/types";
 	import {
 		Heart,
 		User,
@@ -21,17 +19,32 @@
 		Search,
 	} from "lucide-svelte";
 
-	let likes: any[] = $state([]);
+	let likes: TumblrPost[] = $state([]);
 	let loading = $state(false);
 	let hasMore = $state(true);
 	let accountOffsets: Record<string, number> = $state({});
 	let error = $state("");
 	let isOffline = $state(false);
 	let slideshowActive = $state(false);
+	
+	let fetchController: AbortController | null = null;
+	
+	let currentFilter = $state<PostFilter>("all");
+	let gridColumns = $state("auto");
 
-	let currentFilter = $state("all");
+	const FILTERS: { value: PostFilter; label: string }[] = [
+		{ value: "all", label: "All" },
+		{ value: "photo", label: "Photos" },
+		{ value: "video", label: "Videos" },
+		{ value: "audio", label: "Audio" },
+		{ value: "quote", label: "Quotes" },
+		{ value: "link", label: "Links" },
+		{ value: "chat", label: "Chat" },
+		{ value: "answer", label: "Asks" },
+		{ value: "text", label: "Text" }
+	];
 
-	let activeAccounts = $derived($accounts.filter((a) => a.active));
+	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
 	let initialMount = $state(true);
 	let prevAccountsStr = $state("");
@@ -56,75 +69,15 @@
 		},
 	};
 
-	let filteredLikes = $derived(
-		likes.filter((post) => {
-			if (currentFilter === "all") return true;
-
-			// Check top-level type first
-			if (post.type === currentFilter) return true;
-
-			// Check for specific content blocks in NPF (Dashboard often returns link posts as 'text')
-			const blocks = [
-				...(post.content || []),
-				...(post.trail || []).flatMap((t: any) => t.content || []),
-			];
-
-			if (currentFilter === "photo")
-				return blocks.some((b: any) => b.type === "image");
-			if (currentFilter === "video")
-				return blocks.some((b: any) => b.type === "video");
-			if (currentFilter === "audio")
-				return blocks.some((b: any) => b.type === "audio");
-			if (currentFilter === "link")
-				return blocks.some((b: any) => b.type === "link");
-			if (currentFilter === "quote")
-				return blocks.some((b: any) => b.subtype === "quote");
-			if (currentFilter === "chat")
-				return blocks.some((b: any) => b.subtype === "chat");
-			if (currentFilter === "answer")
-				return post.layout?.some((l: any) => l.type === "ask");
-
-			return post.type === currentFilter;
-		}),
-	);
+	let filteredLikes = $derived(filterPosts(likes, currentFilter));
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
 
-	async function cacheAllVisible() {
+	async function startCacheAll() {
 		if (downloadingAll) return;
 		downloadingAll = true;
-
-		const allUrls = new Set<string>();
-		for (const post of filteredLikes) {
-			for (const url of getAllMediaUrls(post)) {
-				allUrls.add(url);
-			}
-		}
-
-		const urlsToDownload: string[] = [];
-		for (const url of Array.from(allUrls)) {
-			if (!(await isMediaCached(url))) {
-				urlsToDownload.push(url);
-			}
-		}
-
-		downloadProgress = { done: 0, total: urlsToDownload.length };
-		if (urlsToDownload.length === 0) {
-			downloadingAll = false;
-			return;
-		}
-
-		const BATCH = 4;
-		for (let i = 0; i < urlsToDownload.length; i += BATCH) {
-			const batch = urlsToDownload.slice(i, i + BATCH);
-			await Promise.all(
-				batch.map(async (url) => {
-					await downloadAndCacheMedia(url);
-					downloadProgress.done++;
-				}),
-			);
-		}
+		await cacheAllVisible(filteredLikes, (p) => { downloadProgress = p; });
 		downloadingAll = false;
 	}
 
@@ -138,7 +91,13 @@
 			loading = false;
 			return;
 		}
-		if (loading) return;
+		if (loading && fetchController) {
+			fetchController.abort();
+		}
+
+		fetchController = new AbortController();
+		loading = true;
+		error = "";
 
 		if (reset) {
 			accountOffsets = {};
@@ -146,13 +105,11 @@
 			hasMore = true;
 		}
 
-		if (!hasMore) return;
-		loading = true;
-
 		try {
 			const res = await fetch("/api/user/likes", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
+				signal: fetchController.signal,
 				body: JSON.stringify({
 					accounts: activeAccounts,
 					before: accountOffsets,
@@ -162,7 +119,7 @@
 			if (!res.ok) throw new Error("Failed to load likes");
 
 			const data = await res.json();
-			const newLikes = data.liked_posts;
+			const newLikes: TumblrPost[] = data.liked_posts;
 			const newBefore = data.newBefore;
 
 			if (!newLikes || newLikes.length === 0) {
@@ -170,7 +127,7 @@
 			} else {
 				const existingIds = new Set(likes.map((p) => p.id));
 				const uniqueNew = newLikes.filter(
-					(p: any) => !existingIds.has(p.id),
+					(p) => !existingIds.has(p.id),
 				);
 
 				if (uniqueNew.length === 0 && newLikes.length > 0) {
@@ -183,11 +140,25 @@
 				}
 			}
 		} catch (err: any) {
+			if (err.name === 'AbortError') return;
 			error = err.message;
 		} finally {
-			loading = false;
+			if (fetchController && !fetchController.signal.aborted) {
+				loading = false;
+			}
 		}
 	}
+
+	// Auto-fetch to ensure the last row is perfectly filled
+	$effect(() => {
+		if (gridColumns !== "auto" && !loading && hasMore && filteredLikes.length > 0) {
+			const cols = parseInt(gridColumns);
+			if (filteredLikes.length % cols !== 0) {
+				// We have empty spots on the last row, fetch more!
+				loadLikes();
+			}
+		}
+	});
 
 	// Reactive reload when active accounts or filter change
 	$effect(() => {
@@ -245,7 +216,7 @@
 	});
 </script>
 
-<div class="min-h-screen p-4 md:p-8 bg-black">
+<div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
 	{#if isOffline}
 		<div class="alert alert-warning shadow-lg mb-6">
 			<svg
@@ -270,7 +241,7 @@
 	{/if}
 
 	<header
-		class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+		class="mb-8 shrink-0 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
 	>
 		<div>
 			<h1
@@ -309,80 +280,30 @@
 				<div
 					class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap"
 				>
-					<button
-						class="tab {currentFilter === 'all'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "all";
-						}}>All</button
-					>
-					<button
-						class="tab {currentFilter === 'photo'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "photo";
-						}}>Photos</button
-					>
-					<button
-						class="tab {currentFilter === 'video'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "video";
-						}}>Videos</button
-					>
-					<button
-						class="tab {currentFilter === 'audio'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "audio";
-						}}>Audio</button
-					>
-					<button
-						class="tab {currentFilter === 'quote'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "quote";
-						}}>Quotes</button
-					>
-					<button
-						class="tab {currentFilter === 'link'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "link";
-						}}>Links</button
-					>
-					<button
-						class="tab {currentFilter === 'chat'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "chat";
-						}}>Chat</button
-					>
-					<button
-						class="tab {currentFilter === 'answer'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "answer";
-						}}>Asks</button
-					>
-					<button
-						class="tab {currentFilter === 'text'
-							? 'tab-active bg-primary text-white'
-							: 'text-gray-400'}"
-						onclick={() => {
-							currentFilter = "text";
-						}}>Text</button
-					>
+					{#each FILTERS as f}
+						<button
+							class="tab {currentFilter === f.value
+								? 'tab-active bg-primary text-white'
+								: 'text-gray-400'}"
+							onclick={() => { currentFilter = f.value; }}
+						>{f.label}</button>
+					{/each}
 				</div>
 				<div class="flex items-center gap-2">
+					<select class="select select-bordered select-sm bg-gray-900 text-white border-gray-800" bind:value={gridColumns}>
+						<option value="auto">Auto Columns</option>
+						<option value="2">2 Columns</option>
+						<option value="3">3 Columns</option>
+						<option value="4">4 Columns</option>
+						<option value="5">5 Columns</option>
+						<option value="6">6 Columns</option>
+						<option value="8">8 Columns</option>
+						<option value="10">10 Columns</option>
+						<option value="12">12 Columns</option>
+						<option value="15">15 Columns</option>
+						<option value="18">18 Columns</option>
+						<option value="20">20 Columns</option>
+					</select>
 					<button
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
 						onclick={() => (slideshowActive = true)}
@@ -392,7 +313,7 @@
 					</button>
 					<button
 						class="btn btn-sm btn-primary gap-2"
-						onclick={cacheAllVisible}
+						onclick={startCacheAll}
 						disabled={downloadingAll || isOffline}
 					>
 						{#if downloadingAll}
@@ -425,27 +346,31 @@
 			Please activate an account to view your favourites.
 		</div>
 	{:else}
-		{#if error}
+		{#if error && !isOffline}
 			<div class="alert alert-error mb-6">{error}</div>
 		{/if}
 
 		{#if filteredLikes.length === 0 && !loading && likes.length > 0}
-			<div class="py-20 text-center text-gray-500">
+			<div class="py-20 flex-1 flex items-center justify-center text-gray-500">
 				No favourited posts match the current filter.
 			</div>
 		{:else}
-			<main
-				class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max"
-			>
-				{#each filteredLikes as post (post.id)}
-					<LazyRender>
-						<PostCard {post} />
-					</LazyRender>
-				{/each}
-			</main>
+			<div class="flex-1 overflow-y-auto pr-2 pb-20">
+				<main 
+					class="grid gap-4 items-start {gridColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+					style={gridColumns !== 'auto' ? `grid-template-columns: repeat(${gridColumns}, minmax(0, 1fr));` : ''}
+				>
+					{#each filteredLikes as post (post.id)}
+						<div class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
+							<LazyRender>
+								<PostCard {post} />
+							</LazyRender>
+						</div>
+					{/each}
+				</main>
+				<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
+			</div>
 		{/if}
-
-		<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
 	{/if}
 </div>
 

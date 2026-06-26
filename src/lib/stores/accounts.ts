@@ -1,5 +1,6 @@
 import { writable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
+import { getCachedAccounts, setCachedAccounts } from './db';
 
 export interface TumblrAccount {
 	blogName: string;
@@ -9,21 +10,22 @@ export interface TumblrAccount {
 	active: boolean;
 }
 
-const STORAGE_KEY = 'tumblr_accounts';
-
 function createAccountsStore() {
-	// Initialize from localStorage if available
-	const initial: TumblrAccount[] = browser
-		? JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-		: [];
+	const { subscribe, set, update }: Writable<TumblrAccount[]> = writable([]);
 
-	const { subscribe, set, update }: Writable<TumblrAccount[]> = writable(initial);
+	if (browser) {
+		// Initialize async from our Storage Bucket
+		getCachedAccounts().then(cached => {
+			if (cached && cached.length > 0) {
+				set(cached);
+			}
+		});
+	}
 
 	return {
 		subscribe,
 		addAccount: (account: TumblrAccount) =>
 			update((accounts) => {
-				// Prevent duplicates
 				const existingIndex = accounts.findIndex((a) => a.blogName === account.blogName);
 				let newAccounts;
 				if (existingIndex >= 0) {
@@ -32,13 +34,13 @@ function createAccountsStore() {
 				} else {
 					newAccounts = [...accounts, account];
 				}
-				if (browser) localStorage.setItem(STORAGE_KEY, JSON.stringify(newAccounts));
+				if (browser) setCachedAccounts(newAccounts);
 				return newAccounts;
 			}),
 		removeAccount: (blogName: string) =>
 			update((accounts) => {
 				const newAccounts = accounts.filter((a) => a.blogName !== blogName);
-				if (browser) localStorage.setItem(STORAGE_KEY, JSON.stringify(newAccounts));
+				if (browser) setCachedAccounts(newAccounts);
 				return newAccounts;
 			}),
 		toggleActive: (blogName: string) =>
@@ -46,7 +48,7 @@ function createAccountsStore() {
 				const newAccounts = accounts.map((a) =>
 					a.blogName === blogName ? { ...a, active: !a.active } : a
 				);
-				if (browser) localStorage.setItem(STORAGE_KEY, JSON.stringify(newAccounts));
+				if (browser) setCachedAccounts(newAccounts);
 				return newAccounts;
 			})
 	};

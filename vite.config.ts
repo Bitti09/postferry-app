@@ -24,6 +24,7 @@ export default defineConfig({
             manifest: {
                 short_name: 'tmblr',
                 name: 'tmblr Offline Reader',
+                description: 'Offline-first Tumblr Reader',
                 start_url: '/',
                 display: 'standalone',
                 theme_color: '#000000',
@@ -32,11 +33,26 @@ export default defineConfig({
                     {
                         src: 'pwa-192x192.png',
                         sizes: '192x192',
-                        type: 'image/png'
+                        type: 'image/png',
+                        purpose: 'any'
                     },
                     {
                         src: 'pwa-512x512.png',
                         sizes: '512x512',
+                        type: 'image/png',
+                        purpose: 'any'
+                    }
+                ],
+                screenshots: [
+                    {
+                        src: 'screenshot-desktop.png',
+                        sizes: '1280x720',
+                        type: 'image/png',
+                        form_factor: 'wide'
+                    },
+                    {
+                        src: 'screenshot-mobile.png',
+                        sizes: '750x1334',
                         type: 'image/png'
                     }
                 ]

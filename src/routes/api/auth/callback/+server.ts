@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth, tokenSecretsMap } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 
@@ -33,7 +34,8 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		oauth.authorize(requestData, { key: oauth_token, secret: token_secret })
 	);
 
-	const response = await fetch(requestData.url, {
+	await checkRateLimit();
+		const response = await fetch(requestData.url, {
 		method: requestData.method,
 		headers: {
 			...authHeader,
@@ -92,19 +94,43 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 					active: true
 				};
 				
-				const storageKey = 'tumblr_accounts';
-				let accounts = JSON.parse(localStorage.getItem(storageKey) || '[]');
-				
-				// Prevent duplicates
-				const existingIndex = accounts.findIndex(a => a.blogName === newAccount.blogName);
-				if (existingIndex >= 0) {
-					accounts[existingIndex] = { ...newAccount, active: accounts[existingIndex].active };
-				} else {
-					accounts.push(newAccount);
+				async function saveAccount() {
+					let idbFactory = window.indexedDB;
+					if ('storageBuckets' in navigator) {
+						const nav = navigator;
+						const bucket = await nav.storageBuckets.open('tumblr-app-state', { persisted: true, durability: 'strict' });
+						idbFactory = bucket.indexedDB;
+					}
+					
+					const req = idbFactory.open('keyval-store', 1);
+					req.onupgradeneeded = () => req.result.createObjectStore('keyval');
+					req.onsuccess = () => {
+						const db = req.result;
+						const tx = db.transaction('keyval', 'readwrite');
+						const store = tx.objectStore('keyval');
+						const getReq = store.get('tumblr_cached_accounts');
+						
+						getReq.onsuccess = () => {
+							const accounts = getReq.result || [];
+							const existingIndex = accounts.findIndex(a => a.blogName === newAccount.blogName);
+							if (existingIndex >= 0) {
+								accounts[existingIndex] = { ...newAccount, active: accounts[existingIndex].active };
+							} else {
+								accounts.push(newAccount);
+							}
+							store.put(accounts, 'tumblr_cached_accounts');
+						};
+						
+						tx.oncomplete = () => {
+							window.location.href = '/';
+						};
+					};
+					req.onerror = () => {
+						console.error('Failed to save account');
+						window.location.href = '/';
+					};
 				}
-				
-				localStorage.setItem(storageKey, JSON.stringify(accounts));
-				window.location.href = '/';
+				saveAccount();
 			</script>
 		</body>
 		</html>

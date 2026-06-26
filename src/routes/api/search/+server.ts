@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 
@@ -43,6 +44,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		console.log(`[Backend Search API] Auth Header keys:`, Object.keys(authHeader));
 
+		await checkRateLimit();
 		const res = await fetch(requestData.url, {
 			headers: { ...authHeader }
 		});

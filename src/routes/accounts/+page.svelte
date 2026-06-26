@@ -1,13 +1,27 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
-	import { Heart, User, RefreshCw, CheckCircle2, Circle } from 'lucide-svelte';
+	import { Heart, User, RefreshCw, CheckCircle2, Circle, Download, Loader2 } from 'lucide-svelte';
+	import { downloadAndCacheMedia, bulkIsMediaCached, addPostsToCache } from '$lib/stores/db';
+	import { getAllMediaUrls } from '$lib/mediaUrls';
+	import type { TumblrAccount, TumblrPost } from '$lib/types';
 
 	let accountInfos = $state<Record<string, any>>({});
 	let loading = $state(false);
 	let error = $state('');
+	let isOffline = $state(false);
+	let downloadingFavs = $state<Record<string, { fetchedPosts: number, newMedia: number, skippedMedia: number, active: boolean }>>({});
 
 	async function fetchAccountInfos() {
+		if (typeof localStorage !== 'undefined') {
+			const cached = localStorage.getItem('tumblr_account_infos');
+			if (cached) accountInfos = JSON.parse(cached);
+		}
+
+		if (typeof navigator !== 'undefined' && !navigator.onLine) {
+			return; // Don't attempt to fetch if offline
+		}
+
 		loading = true;
 		error = '';
 		try {
@@ -23,6 +37,9 @@
 				}
 			});
 			await Promise.all(promises);
+			if (typeof localStorage !== 'undefined') {
+				localStorage.setItem('tumblr_account_infos', JSON.stringify(accountInfos));
+			}
 		} catch (err: any) {
 			error = 'Failed to fetch some account information.';
 			console.error(err);
@@ -31,17 +48,94 @@
 		}
 	}
 
+	async function cacheAllFavs(account: TumblrAccount) {
+		if (downloadingFavs[account.blogName]?.active) return;
+		
+		downloadingFavs[account.blogName] = { fetchedPosts: 0, newMedia: 0, skippedMedia: 0, active: true };
+		let beforeTimestamp: number | null = null;
+		
+		try {
+			while (true) {
+				const res = await fetch('/api/blog/likes', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ account, blogName: account.blogName, before: beforeTimestamp })
+				});
+
+				if (!res.ok) {
+					if (res.status === 429) {
+						error = 'Tumblr API Rate Limit Exceeded. Cycle your VPN IP and click "Cache Favs" to resume.';
+					} else {
+						const msg = await res.text();
+						error = `Failed to fetch likes: ${msg}`;
+					}
+					break;
+				}
+
+				const data = await res.json();
+				const posts = data.liked_posts;
+				
+				if (!posts || posts.length === 0) break; // Reached the end!
+
+				// Cache the raw post metadata directly into IndexedDB (supports text-only posts!)
+				await addPostsToCache(posts);
+
+				// Extract and download media for this batch
+				const urlMeta = new Map<string, { timestamp: number, post: TumblrPost }>();
+				for (const post of posts) {
+					const meta = { timestamp: post.timestamp, post: post };
+					for (const u of getAllMediaUrls(post)) {
+						if (!urlMeta.has(u)) urlMeta.set(u, meta);
+					}
+				}
+
+				const entries = Array.from(urlMeta.entries());
+				const cachedSet = await bulkIsMediaCached(entries.map(([url]) => url));
+
+				await Promise.all(entries.map(async ([url, meta]) => {
+					const wasCached = cachedSet.has(url);
+					await downloadAndCacheMedia(url, meta);
+					
+					if (!wasCached) {
+						if (downloadingFavs[account.blogName]) {
+							downloadingFavs[account.blogName].newMedia++;
+						}
+					} else {
+						if (downloadingFavs[account.blogName]) {
+							downloadingFavs[account.blogName].skippedMedia++;
+						}
+					}
+				}));
+
+				downloadingFavs[account.blogName].fetchedPosts += posts.length;
+				
+				// Get oldest timestamp for next batch
+				beforeTimestamp = Math.min(...posts.map((p: any) => p.liked_timestamp));
+				
+				// Optional: wait a tiny bit to not completely slam the network stack
+				await new Promise(r => setTimeout(r, 500));
+			}
+		} catch (err: any) {
+			console.error("Error caching favourites:", err);
+			error = err.message || 'An unexpected error occurred during caching.';
+		} finally {
+			if (downloadingFavs[account.blogName]) {
+				downloadingFavs[account.blogName].active = false;
+			}
+		}
+	}
+
 	onMount(() => {
+		if (typeof window !== 'undefined') {
+			isOffline = !navigator.onLine;
+			window.addEventListener('online', () => isOffline = false);
+			window.addEventListener('offline', () => isOffline = true);
+		}
 		fetchAccountInfos();
 	});
 
 	function toggleActive(blogName: string) {
-		accounts.update(all => all.map(acc => {
-			if (acc.blogName === blogName) {
-				return { ...acc, active: !acc.active };
-			}
-			return acc;
-		}));
+		accounts.toggleActive(blogName);
 	}
 </script>
 
@@ -74,7 +168,7 @@
 			</div>
 		</header>
 
-		{#if error}
+		{#if error && (typeof navigator === 'undefined' || navigator.onLine)}
 			<div class="alert alert-error mb-8 shadow-xl">
 				<span>{error}</span>
 			</div>
@@ -138,6 +232,24 @@
 							<button class="btn btn-sm btn-outline border-gray-800 hover:bg-gray-800 text-gray-400" onclick={() => window.location.href = `/likes?account=${account.blogName}`}>
 								See Likes
 							</button>
+							{#if !isOffline}
+								<button 
+									class="btn btn-sm btn-primary gap-2" 
+									onclick={() => cacheAllFavs(account)}
+									disabled={downloadingFavs[account.blogName]?.active}
+								>
+									{#if downloadingFavs[account.blogName]?.active}
+										<Loader2 size={16} class="animate-spin" />
+										<span class="flex flex-col items-start leading-tight">
+											<span class="text-xs">Posts: {downloadingFavs[account.blogName].fetchedPosts}</span>
+											<span class="text-[10px] text-gray-200">New: {downloadingFavs[account.blogName].newMedia} | Cached: {downloadingFavs[account.blogName].skippedMedia}</span>
+										</span>
+									{:else}
+										<Download size={16} />
+										Cache Favs
+									{/if}
+								</button>
+							{/if}
 						</div>
 					</div>
 				</div>

@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 

@@ -53,7 +53,10 @@
 	});
 </script>
 
-{#if isGif}
+{#if type === 'video' || type.startsWith('video/')}
+	<!-- svelte-ignore a11y_media_has_caption -->
+	<video {src} class="{className} {loaded ? 'opacity-100' : 'opacity-0'}" style="object-fit: cover; transition: opacity 0.3s;" onloadeddata={() => loaded = true} preload="metadata"></video>
+{:else if isGif}
 	<canvas bind:this={canvas} class="{className} {loaded ? 'opacity-100' : 'opacity-0'}" style="object-fit: cover; transition: opacity 0.3s;"></canvas>
 {:else}
 	<img {src} {alt} class="{className} {loaded ? 'opacity-100' : 'opacity-0'}" style="transition: opacity 0.3s;" loading="lazy" onload={() => loaded = true} />

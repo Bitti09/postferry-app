@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { dev } from "$app/environment";
 	import { accounts } from "$lib/stores/accounts";
 	import NPFRenderer from "$lib/components/NPFRenderer.svelte";
-	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote } from "lucide-svelte";
+	import AvatarImage from "$lib/components/AvatarImage.svelte";
+	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize } from "lucide-svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
 
 	let { data } = $props();
@@ -14,6 +16,7 @@
 	let loading = $state(true);
 	let error = $state("");
 	let useGrid = $state(true);
+	let showDebug = $state(false);
 
 	// Tracking like/reblog status for active accounts
 	let accountLikes = $state<Record<string, boolean>>({});
@@ -39,7 +42,11 @@
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ account: acc, blogName, postId })
-					}).then(r => r.json())
+					}).then(async r => {
+						const data = await r.json();
+						if (!r.ok) throw new Error(data.error || 'Failed to fetch post details.');
+						return data;
+					})
 				)
 			);
 
@@ -164,8 +171,18 @@
 		</div>
 
 		<div class="flex items-center gap-2">
+			{#if dev && post}
+				<button class="btn btn-xs btn-outline btn-warning border-dashed uppercase tracking-widest text-[9px] font-black mr-2" onclick={() => showDebug = true}>
+					Debug API
+				</button>
+			{/if}
 			<span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Viewing Post</span>
 			<span class="text-xs font-black text-white px-2 py-1 bg-gray-800 rounded-lg">{postId}</span>
+			{#if post?.type}
+				<span class="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-primary/30 text-primary bg-primary/10">
+					{post.type}
+				</span>
+			{/if}
 		</div>
 	</div>
 
@@ -190,14 +207,14 @@
 						<div class="flex items-center gap-3 mb-6">
 							<a href="/blog/{post.blog_name}" class="avatar hover:opacity-80 transition-opacity">
 								<div class="w-12 h-12 rounded-xl ring-2 ring-gray-800">
-									<img src={`https://api.tumblr.com/v2/blog/${post.blog_name}/avatar/128`} alt={post.blog_name} />
+									<AvatarImage blogName={post.blog_name} size={128} />
 								</div>
 							</a>
 							<div>
 								<a href="/blog/{post.blog_name}" class="text-sm font-black text-white truncate hover:text-primary transition-colors block">{post.blog_name}</a>
-								<div class="flex items-center gap-1.5 text-gray-500">
+								<div class="flex items-center gap-1.5 text-gray-500 mt-1">
 									<Clock size={12} />
-									<span class="text-xs font-bold">{new Date(post.timestamp * 1000).toLocaleDateString()}</span>
+									<span class="text-[11px] font-bold leading-none">{new Date(post.timestamp * 1000).toLocaleDateString()}</span>
 								</div>
 							</div>
 						</div>
@@ -246,7 +263,7 @@
 								<div class="bg-black/30 rounded-3xl p-5 border border-gray-800/50">
 									<div class="flex items-center gap-3 mb-4">
 										<div class="w-8 h-8 rounded-lg overflow-hidden border border-gray-800">
-											<img src={`https://api.tumblr.com/v2/blog/${account.blogName}/avatar/64`} alt="" />
+											<AvatarImage blogName={account.blogName} size={64} />
 										</div>
 										<span class="text-sm font-black text-white truncate">{account.blogName}</span>
 									</div>
@@ -286,15 +303,32 @@
 				</div>
 			</aside>
 
-			<!-- MIDDLE COLUMN: Content Stage — fills entire height, no scrollbar -->
-			<main class="h-full bg-black flex flex-col overflow-hidden">
-				<div class="flex-1 flex flex-col min-h-0">
+			<!-- MIDDLE COLUMN: Content Stage -->
+			<main class="h-full bg-black flex flex-col overflow-y-auto custom-scrollbar">
+				<div class="w-full flex flex-col pb-8">
+					{#if post.reblogged_from_name}
+						<div class="flex items-center gap-2 px-6 py-4 bg-gray-900 border-b border-gray-800 text-gray-400 text-sm">
+							<Repeat2 size={16} class="text-gray-500 shrink-0" />
+							<span class="font-medium">
+								<a href="/blog/{post.blog_name}" class="font-bold text-white hover:text-primary transition-colors">{post.blog_name}</a>
+								reblogged from 
+								<a href="/post/{post.reblogged_from_name}/{post.reblogged_from_id}" class="font-bold text-white hover:text-primary transition-colors">{post.reblogged_from_name}</a>
+								
+								{#if post.reblogged_root_name && post.reblogged_root_name !== post.reblogged_from_name && post.reblogged_root_name !== post.blog_name}
+									<span class="opacity-75">
+										(originally by <a href="/post/{post.reblogged_root_name}/{post.reblogged_root_id}" class="font-bold text-white hover:text-primary transition-colors">{post.reblogged_root_name}</a>)
+									</span>
+								{/if}
+							</span>
+						</div>
+					{/if}
+					
 					<!-- Reblog Trail Content -->
 					{#if post.trail && post.trail.length > 0}
 						{#each post.trail as item}
 							{#if item.content && item.content.length > 0}
-								<div class="flex-1 flex flex-col min-h-0">
-									<NPFRenderer content={item.content} {useGrid} fillHeight={true} />
+								<div class="mb-10 pb-10 border-b border-gray-800/50 last:border-0 pt-6">
+									<NPFRenderer content={item.content} {useGrid} />
 								</div>
 							{/if}
 						{/each}
@@ -302,8 +336,8 @@
 
 					<!-- This Post's Added Content (if any) -->
 					{#if post.content && post.content.length > 0}
-						<div class="flex-1 flex flex-col min-h-0">
-							<NPFRenderer content={post.content} {useGrid} fillHeight={true} />
+						<div class="{post.trail?.length > 0 ? 'mt-4' : 'pt-6'}">
+							<NPFRenderer content={post.content} {useGrid} />
 						</div>
 					{/if}
 				</div>
@@ -344,9 +378,19 @@
 						<!-- Pure text trail for context -->
 						{#if post.trail && post.trail.length > 0}
 							<div class="space-y-6">
-								{#each post.trail as item}
+								{#each post.trail as item, i}
 									<div class="border-l-2 border-gray-800 pl-4 py-1">
-										<a href="/blog/{item.blog?.name}" class="text-xs font-black text-primary mb-2 uppercase hover:underline block">{item.blog?.name}</a>
+										<div class="flex items-center gap-2 mb-2">
+											<a href="/blog/{item.blog?.name}" class="avatar hover:opacity-80 transition-opacity">
+												<div class="w-6 h-6 rounded-md ring-1 ring-gray-800">
+													<AvatarImage blogName={item.blog?.name} size={64} />
+												</div>
+											</a>
+											<a href="/blog/{item.blog?.name}" class="text-xs font-black text-primary uppercase hover:underline">{item.blog?.name}</a>
+											{#if i === 0}
+												<span class="px-1.5 py-0.5 rounded-md bg-primary/20 text-primary border border-primary/30 text-[9px] font-black uppercase tracking-widest leading-none">OP</span>
+											{/if}
+										</div>
 										<div class="text-xs text-gray-400 italic line-clamp-4">
 											{#each item.content || [] as block}
 												{#if block.type === 'text'}{block.text} {/if}
@@ -363,14 +407,23 @@
 						<div class="space-y-3">
 							{#each reblogNotes as note}
 								<div class="flex items-center gap-3 p-2 bg-black/20 rounded-xl border border-gray-800/50">
-									<img src={`https://api.tumblr.com/v2/blog/${note.blog_name}/avatar/64`} class="w-6 h-6 rounded-md" alt="" />
-									<a href="/blog/{note.blog_name}" class="text-xs font-bold text-white hover:text-primary transition-colors flex-1 truncate">{note.blog_name}</a>
+									<AvatarImage blogName={note.blog_name} size={64} class="w-8 h-8 rounded-md shrink-0" />
+									<div class="flex-1 min-w-0 flex flex-col justify-center">
+										<a href={note.post_id ? `/post/${note.blog_name}/${note.post_id}` : `/blog/${note.blog_name}`} class="text-xs font-bold text-white hover:text-primary transition-colors truncate">{note.blog_name}</a>
+										{#if note.reblog_parent_blog_name}
+											<div class="text-[10px] text-gray-500 truncate flex items-center gap-1 mt-0.5">
+												<span class="opacity-50">from</span> <a href="/blog/{note.reblog_parent_blog_name}" class="hover:text-gray-300 transition-colors font-medium">{note.reblog_parent_blog_name}</a>
+											</div>
+										{/if}
+									</div>
 									{#if note.post_id}
-										<a href="/post/{note.blog_name}/{note.post_id}" class="text-green-500 hover:text-green-400 transition-colors" title="View reblog">
+										<a href="/post/{note.blog_name}/{note.post_id}" class="text-green-500 hover:text-green-400 transition-colors shrink-0 p-1" title="View reblog">
 											<Repeat2 size={14} />
 										</a>
 									{:else}
-										<Repeat2 size={10} class="text-green-500" />
+										<div class="shrink-0 p-1">
+											<Repeat2 size={12} class="text-green-500/50" />
+										</div>
 									{/if}
 								</div>
 							{/each}
@@ -383,7 +436,7 @@
 						<div class="space-y-3">
 							{#each likeNotes as note}
 								<div class="flex items-center gap-3 p-2 bg-black/20 rounded-xl border border-gray-800/50">
-									<img src={`https://api.tumblr.com/v2/blog/${note.blog_name}/avatar/64`} class="w-6 h-6 rounded-md" alt="" />
+									<AvatarImage blogName={note.blog_name} size={64} class="w-6 h-6 rounded-md" />
 									<a href="/blog/{note.blog_name}" class="text-xs font-bold text-white hover:text-primary transition-colors flex-1 truncate">{note.blog_name}</a>
 									<Heart size={10} class="text-pink-500" fill="currentColor" />
 								</div>
@@ -416,6 +469,28 @@
 		</div>
 	{/if}
 </div>
+
+{#if showDebug && dev}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onclick={() => showDebug = false}>
+		<div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+			<div class="flex items-center justify-between p-4 border-b border-gray-800">
+				<h3 class="text-lg font-bold text-white tracking-widest uppercase">API Response Debug</h3>
+				<div class="flex items-center gap-2">
+					<button class="btn btn-sm btn-outline border-gray-700 text-gray-300 hover:text-white" onclick={() => {
+						navigator.clipboard.writeText(JSON.stringify(post, null, 2));
+						const btn = document.getElementById('copy-json-btn');
+						if(btn) { btn.innerText = 'Copied!'; setTimeout(() => btn.innerText = 'Copy JSON', 2000); }
+					}} id="copy-json-btn">Copy JSON</button>
+					<button class="btn btn-sm btn-circle btn-ghost" onclick={() => showDebug = false}>✕</button>
+				</div>
+			</div>
+			<div class="p-4 overflow-y-auto flex-1 custom-scrollbar group relative">
+				<pre class="text-[11px] text-green-400 font-mono whitespace-pre-wrap break-all select-all">{JSON.stringify(post, null, 2)}</pre>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <style>
 	.custom-scrollbar::-webkit-scrollbar {

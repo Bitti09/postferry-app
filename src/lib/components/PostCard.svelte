@@ -1,63 +1,61 @@
 <script lang="ts">
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from 'lucide-svelte';
 	import { onMount } from 'svelte';
-	import { getAllMediaUrls, downloadAndCacheMedia, isMediaCached, getPrimaryMediaUrl } from '$lib/stores/db';
+	import { downloadAndCacheMedia, bulkIsMediaCached } from '$lib/stores/db';
+	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls } from '$lib/mediaUrls';
+	import { settings } from '$lib/stores/settings';
+	import CachedMedia from './CachedMedia.svelte';
+	import type { TumblrPost } from '$lib/types';
 
-	let { post } = $props<{ post: any }>();
+	let {
+		post,
+		mode = 'normal',
+		onclickOverride
+	} = $props<{
+		post: TumblrPost;
+		mode?: 'normal' | 'cache';
+		onclickOverride?: () => void;
+	}>();
 
 	let mediaUrl = $derived(getPrimaryMediaUrl(post));
+	let allUrls = $derived(getAllMediaUrls(post));
 
-	let isVideo = $derived.by(() => {
-		if (post.type === 'video') return true;
-		const blocks = [...(post.content || []), ...((post.trail || []).flatMap((t: any) => t.content || []))];
-		if (blocks.some((b: any) => b.type === 'video')) return true;
-		if (post.body && /<video[^>]*><source/i.test(post.body)) return true;
-		return false;
-	});
-
-	let isImage = $derived.by(() => {
-		if (post.type === 'photo') return true;
-		const blocks = [...(post.content || []), ...((post.trail || []).flatMap((t: any) => t.content || []))];
-		if (blocks.some((b: any) => b.type === 'image')) return true;
-		if (post.body && /<img[^>]+src=/i.test(post.body)) return true;
-		return false;
-	});
+	let isVideo = $derived(getVideoUrls(post).length > 0);
+	let isImage = $derived(getImageUrls(post).length > 0);
 	let nsfw = $derived(post.is_nsfw);
 
 	let isCached = $state(false);
 	let isDownloading = $state(false);
 
+	let checkPromise: Promise<void> | null = null;
+
 	async function checkCacheStatus() {
-		const urls = getAllMediaUrls(post);
-		if (urls.length === 0) {
-			isCached = false;
-			return;
-		}
-		let allCached = true;
-		for (const url of urls) {
-			if (!(await isMediaCached(url))) {
-				allCached = false;
-				break;
+		if (checkPromise) return checkPromise;
+
+		checkPromise = (async () => {
+			if (allUrls.length === 0) {
+				isCached = true;
+				return;
 			}
-		}
-		isCached = allCached;
+			const cachedSet = await bulkIsMediaCached(allUrls);
+			isCached = allUrls.every((url) => cachedSet.has(url));
+		})();
+		return checkPromise.finally(() => { checkPromise = null; });
 	}
 
 	async function downloadPostMedia() {
 		if (isDownloading || isCached) return;
 		isDownloading = true;
 
-		const urls = getAllMediaUrls(post);
-		if (urls.length === 0) {
+		if (allUrls.length === 0) {
+			isCached = true;
 			isDownloading = false;
 			return;
 		}
 
-		await Promise.all(urls.map(async (url) => {
-			if (!(await isMediaCached(url))) {
-				await downloadAndCacheMedia(url);
-			}
-		}));
+		const cachedSet = await bulkIsMediaCached(allUrls);
+		const toDownload = allUrls.filter((url) => !cachedSet.has(url));
+		await Promise.all(toDownload.map((url) => downloadAndCacheMedia(url)));
 
 		isDownloading = false;
 		isCached = true;
@@ -66,18 +64,38 @@
 	onMount(() => {
 		checkCacheStatus();
 	});
+
+	$effect(() => {
+		if ($settings.autoCacheMedia && !isCached && !isDownloading) {
+			downloadPostMedia();
+		}
+	});
 </script>
 
-<a
-	href={`/post/${post.blog_name}/${post.id_string || post.id}`}
-	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-[3/4] shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20"
+<svelte:element
+	this={mode === 'cache' ? 'div' : 'a'}
+	role={mode === 'cache' ? 'button' : undefined}
+	tabindex={mode === 'cache' ? 0 : undefined}
+	href={mode === 'normal' ? `/post/${post.blog_name}/${post.id_string || post.id}` : undefined}
+	onkeydown={(e: KeyboardEvent) => {
+		if (mode === 'cache' && (e.key === 'Enter' || e.key === ' ')) {
+			e.preventDefault();
+			onclickOverride?.();
+		}
+	}}
+	onclick={(e: MouseEvent) => {
+		if (mode === 'cache') {
+			e.preventDefault();
+			onclickOverride?.();
+		}
+	}}
+	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-[3/4] shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
 >
 	{#if mediaUrl}
-		<img
-			src={mediaUrl}
+		<CachedMedia
+			url={mediaUrl}
 			alt={post.summary || 'Tumblr Post'}
 			class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-			loading="lazy"
 		/>
 	{:else}
 		<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
@@ -133,28 +151,12 @@
 		</span>
 		<p class="text-xs text-gray-300 line-clamp-2 mt-1">{post.summary}</p>
 		
-		<!-- Tags -->
-		{#if post.tags && post.tags.length > 0}
-			<div class="mt-2 flex flex-wrap gap-1 relative z-30 max-h-12 overflow-hidden">
-				{#each post.tags as tag}
-					<button 
-						class="text-[9px] font-bold text-gray-400 bg-white/5 px-1.5 py-0.5 rounded hover:bg-primary hover:text-white transition-all"
-						onclick={(e) => {
-							e.preventDefault();
-							e.stopPropagation();
-							window.location.href = `/search?q=%23${encodeURIComponent(tag)}`;
-						}}
-					>
-						#{tag}
-					</button>
-				{/each}
-			</div>
-		{/if}
+
 
 		<div class="mt-3 flex items-center justify-between gap-1 text-xs text-gray-400 relative z-30">
 			<span class="truncate">{post.note_count || 0} notes</span>
 			
-			{#if !isCached && !isDownloading && getAllMediaUrls(post).length > 0}
+			{#if !$settings.autoCacheMedia && !isCached && !isDownloading && allUrls.length > 0}
 				<button
 					class="flex items-center gap-1 hover:text-white transition-colors p-1 shrink-0 whitespace-nowrap"
 					onclick={(e) => { e.preventDefault(); e.stopPropagation(); downloadPostMedia(); }}
@@ -162,11 +164,11 @@
 				>
 					<Download size={12} /> <span class="font-bold">Save offline</span>
 				</button>
-			{:else if isDownloading}
+			{:else if !$settings.autoCacheMedia && isDownloading}
 				<div class="flex items-center gap-1 p-1 text-primary shrink-0 whitespace-nowrap">
 					<Loader2 size={12} class="animate-spin" /> <span class="font-bold">Downloading</span>
 				</div>
 			{/if}
 		</div>
 	</div>
-</a>
+</svelte:element>

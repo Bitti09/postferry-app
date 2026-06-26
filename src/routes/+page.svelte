@@ -1,15 +1,30 @@
 <script lang="ts">
-	import { onMount, tick, untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { accounts } from '$lib/stores/accounts';
-	import { addPostsToCache, downloadAndCacheMedia, getAllMediaUrls, isMediaCached } from '$lib/stores/db';
+	import { addPostsToCache } from '$lib/stores/db';
+	import { cacheAllVisible } from '$lib/cacheUtils';
+	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { Plus, User, LogOut, Download, Loader2, Play, Home, Search, Heart } from 'lucide-svelte';
+	import type { TumblrPost, TumblrAccount } from '$lib/types';
+	import { Plus, User, LogOut, Download, Loader2, Play, Home, Heart } from 'lucide-svelte';
 
-	let posts: any[] = $state([]);
+	const FILTERS: { value: PostFilter; label: string }[] = [
+		{ value: 'all', label: 'All' },
+		{ value: 'photo', label: 'Photos' },
+		{ value: 'video', label: 'Videos' },
+		{ value: 'audio', label: 'Audio' },
+		{ value: 'quote', label: 'Quotes' },
+		{ value: 'link', label: 'Links' },
+		{ value: 'chat', label: 'Chat' },
+		{ value: 'answer', label: 'Asks' },
+		{ value: 'text', label: 'Text' }
+	];
+
+	let posts: TumblrPost[] = $state([]);
 	let loading = $state(false);
 	let hasMore = $state(true);
 	let accountOffsets: Record<string, string> = $state({});
@@ -17,66 +32,22 @@
 	let isOffline = $state(false);
 	let slideshowActive = $state(false);
 	
-	let currentFilter = $state('all'); // all, photo, video, text
+	let fetchController: AbortController | null = null;
+	
+	let currentFilter = $state<PostFilter>('all');
 
 	// Reactive active accounts
-	let activeAccounts = $derived($accounts.filter((a) => a.active));
+	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
-	let filteredPosts = $derived(posts.filter(post => {
-		if (currentFilter === 'all') return true;
-
-		// Check top-level type first
-		if (post.type === currentFilter) return true;
-
-		// Check for specific content blocks in NPF (Tumblr often returns NPF link posts as 'text')
-		const blocks = [...(post.content || []), ...(post.trail || []).flatMap((t: any) => t.content || [])];
-		
-		if (currentFilter === 'photo') return blocks.some((b: any) => b.type === 'image');
-		if (currentFilter === 'video') return blocks.some((b: any) => b.type === 'video');
-		if (currentFilter === 'audio') return blocks.some((b: any) => b.type === 'audio');
-		if (currentFilter === 'link') return blocks.some((b: any) => b.type === 'link');
-		if (currentFilter === 'quote') return blocks.some((b: any) => b.subtype === 'quote');
-		if (currentFilter === 'chat') return blocks.some((b: any) => b.subtype === 'chat');
-		if (currentFilter === 'answer') return post.layout?.some((l: any) => l.type === 'ask');
-
-		return post.type === currentFilter;
-	}));
+	let filteredPosts = $derived(filterPosts(posts, currentFilter));
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
 
-	async function cacheAllVisible() {
+	async function startCacheAll() {
 		if (downloadingAll) return;
 		downloadingAll = true;
-		
-		const allUrls = new Set<string>();
-		for (const post of filteredPosts) {
-			for (const url of getAllMediaUrls(post)) {
-				allUrls.add(url);
-			}
-		}
-		
-		const urlsToDownload: string[] = [];
-		for (const url of Array.from(allUrls)) {
-			if (!(await isMediaCached(url))) {
-				urlsToDownload.push(url);
-			}
-		}
-
-		downloadProgress = { done: 0, total: urlsToDownload.length };
-		if (urlsToDownload.length === 0) {
-			downloadingAll = false;
-			return;
-		}
-		
-		const BATCH = 4;
-		for (let i = 0; i < urlsToDownload.length; i += BATCH) {
-			const batch = urlsToDownload.slice(i, i + BATCH);
-			await Promise.all(batch.map(async (url) => {
-				await downloadAndCacheMedia(url);
-				downloadProgress.done++;
-			}));
-		}
+		await cacheAllVisible(filteredPosts, (p) => { downloadProgress = p; });
 		downloadingAll = false;
 	}
 
@@ -92,7 +63,11 @@
 			return;
 		}
 
-		if (loading) return;
+		if (loading && fetchController) {
+			fetchController.abort();
+		}
+
+		fetchController = new AbortController();
 		loading = true;
 		error = '';
 
@@ -106,6 +81,7 @@
 			const res = await fetch('/api/posts/dashboard', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				signal: fetchController.signal,
 				body: JSON.stringify({
 					accounts: activeAccounts,
 					offsets: accountOffsets,
@@ -116,14 +92,14 @@
 			if (!res.ok) throw new Error('Failed to load posts');
 
 			const data = await res.json();
-			const newPosts = data.posts;
+			const newPosts: TumblrPost[] = data.posts;
 			const newOffsets = data.newOffsets;
 
 			if (newPosts.length === 0) {
 				hasMore = false;
 			} else {
 				const existingIds = new Set(posts.map((p) => p.id));
-				const uniqueNewPosts = newPosts.filter((p: any) => !existingIds.has(p.id));
+				const uniqueNewPosts = newPosts.filter((p) => !existingIds.has(p.id));
 
 				if (uniqueNewPosts.length === 0 && newPosts.length > 0) {
 					// Duplicates, continue if more pages
@@ -136,9 +112,12 @@
 				}
 			}
 		} catch (err: any) {
+			if (err.name === 'AbortError') return;
 			error = err.message;
 		} finally {
-			loading = false;
+			if (fetchController && !fetchController.signal.aborted) {
+				loading = false;
+			}
 		}
 	}
 
@@ -218,9 +197,6 @@
 					>
 						<User size={14} />
 						{account.blogName}
-						<button class="ml-1 opacity-50 hover:opacity-100" onclick={(e) => { e.stopPropagation(); removeAccount(account.blogName); }}>
-							<LogOut size={12} />
-						</button>
 					</div>
 				{/each}
 				
@@ -232,15 +208,14 @@
 			{#if activeAccounts.length > 0}
 				<div class="flex items-center gap-4">
 					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap">
-						<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'all'; loadPosts(true); }}>All</button>
-						<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'photo'; loadPosts(true); }}>Photos</button>
-						<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'video'; loadPosts(true); }}>Videos</button>
-						<button class="tab {currentFilter === 'audio' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'audio'; loadPosts(true); }}>Audio</button>
-						<button class="tab {currentFilter === 'quote' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'quote'; loadPosts(true); }}>Quotes</button>
-						<button class="tab {currentFilter === 'link' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'link'; loadPosts(true); }}>Links</button>
-						<button class="tab {currentFilter === 'chat' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'chat'; loadPosts(true); }}>Chat</button>
-						<button class="tab {currentFilter === 'answer' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'answer'; loadPosts(true); }}>Asks</button>
-						<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => { currentFilter = 'text'; loadPosts(true); }}>Text</button>
+						{#each FILTERS as f}
+							<button
+								class="tab {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+								onclick={() => { currentFilter = f.value; loadPosts(true); }}
+							>
+								{f.label}
+							</button>
+						{/each}
 					</div>
 
 					<div class="flex items-center gap-2">
@@ -253,7 +228,7 @@
 						</button>
 						<button 
 							class="btn btn-sm btn-primary gap-2"
-							onclick={cacheAllVisible}
+							onclick={startCacheAll}
 							disabled={downloadingAll || isOffline}
 						>
 							{#if downloadingAll}
@@ -293,7 +268,7 @@
 			Please activate at least one account to view the dashboard.
 		</div>
 	{:else}
-		{#if error}
+		{#if error && !isOffline}
 			<div class="alert alert-error shadow-lg mb-6">
 				<span>{error}</span>
 			</div>

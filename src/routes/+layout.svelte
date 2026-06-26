@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { browser } from '$app/environment';
+	import { onMount } from "svelte";
+	import { browser } from "$app/environment";
 	import "./app.css";
-	import favicon from "$lib/assets/favicon.svg";
 
 	import Navbar from "$lib/components/Navbar.svelte";
 	let { children } = $props();
@@ -15,8 +14,6 @@
 		}
 	});
 </script>
-
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
 <div class="flex flex-col min-h-screen">
 	<Navbar />

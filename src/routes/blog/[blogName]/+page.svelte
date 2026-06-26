@@ -35,6 +35,18 @@
 			return;
 		}
 
+		// LocalStorage caching for offline support
+		if (typeof localStorage !== 'undefined') {
+			const cached = localStorage.getItem(`tumblr_blog_info_${blogName}`);
+			if (cached) info = JSON.parse(cached);
+		}
+
+		if (typeof navigator !== 'undefined' && !navigator.onLine) {
+			loadingInfo = false;
+			loadPosts();
+			return; // Skip fetch
+		}
+
 		// Fetch Info
 		try {
 			const resInfo = await fetch('/api/blog/info', {
@@ -45,6 +57,9 @@
 			if (resInfo.ok) {
 				const data = await resInfo.json();
 				info = data.info;
+				if (typeof localStorage !== 'undefined') {
+					localStorage.setItem(`tumblr_blog_info_${blogName}`, JSON.stringify(info));
+				}
 			}
 		} catch (e) {
 			console.error(e);
@@ -98,7 +113,7 @@
 		<ArrowLeft size={20} /> Back to Dashboard
 	</a>
 
-	{#if error}
+	{#if error && (typeof navigator === 'undefined' || navigator.onLine)}
 		<div class="alert alert-error">{error}</div>
 	{/if}
 

@@ -1,6 +1,25 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Home, Image, Heart, Users, Search } from 'lucide-svelte';
+	import { Home, Image, Heart, Users, Search, Maximize, Minimize, Settings } from 'lucide-svelte';
+	import { onMount } from 'svelte';
+
+	let isFullscreen = $state(false);
+
+	function toggleFullscreen() {
+		if (!document.fullscreenElement) {
+			document.documentElement.requestFullscreen().catch(err => console.error(err));
+		} else if (document.exitFullscreen) {
+			document.exitFullscreen();
+		}
+	}
+
+	onMount(() => {
+		const handleFsChange = () => {
+			isFullscreen = !!document.fullscreenElement;
+		};
+		document.addEventListener('fullscreenchange', handleFsChange);
+		return () => document.removeEventListener('fullscreenchange', handleFsChange);
+	});
 </script>
 
 <div class="navbar bg-gray-900 border-b border-gray-800 px-4 md:px-8 sticky top-0 z-40 backdrop-blur-md bg-opacity-80">
@@ -10,7 +29,7 @@
 			tmblr
 		</a>
 	</div>
-	<div class="flex-none gap-4">
+	<div class="flex-none flex items-center gap-2 pr-2">
 		<ul class="menu menu-horizontal px-1 gap-2">
 			<li>
 				<a href="/" class="{$page.url.pathname === '/' ? 'active bg-primary' : ''} transition-all">
@@ -42,6 +61,22 @@
 					<span class="hidden sm:inline">Accounts</span>
 				</a>
 			</li>
+			<li>
+				<a href="/settings" class="{$page.url.pathname === '/settings' ? 'active bg-primary' : ''} transition-all">
+					<Settings size={18} />
+					<span class="hidden sm:inline">Settings</span>
+				</a>
+			</li>
 		</ul>
+
+		<div class="w-[1px] h-6 bg-gray-700/50 hidden md:block"></div>
+		
+		<button onclick={toggleFullscreen} class="btn btn-ghost btn-circle btn-sm text-gray-400 hover:text-white" title="Toggle Fullscreen">
+			{#if isFullscreen}
+				<Minimize size={18} />
+			{:else}
+				<Maximize size={18} />
+			{/if}
+		</button>
 	</div>
 </div>

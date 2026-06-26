@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 
@@ -24,13 +25,33 @@ export const POST: RequestHandler = async ({ request }) => {
 			oauth.authorize(requestData, { key: account.token, secret: account.secret })
 		);
 
+		await checkRateLimit();
 		const res = await fetch(requestData.url, {
 			headers: { ...authHeader }
 		});
 
 		if (!res.ok) {
-			console.error(`Failed to fetch post detail:`, await res.text());
-			return new Response('Error fetching post from Tumblr', { status: res.status });
+			const text = await res.text();
+			let errorMessage = 'Error fetching post from Tumblr';
+			try {
+				const errorJson = JSON.parse(text);
+				if (errorJson.errors && errorJson.errors[0]?.detail) {
+					errorMessage = errorJson.errors[0].detail;
+				} else if (errorJson.meta?.msg) {
+					errorMessage = errorJson.meta.msg;
+				}
+				if (res.status === 404) {
+					errorMessage = 'This post could not be found. It may have been deleted or the blog may be private.';
+				}
+			} catch (e) {
+				// Fallback to text
+				if (res.status === 404) errorMessage = 'Post not found.';
+			}
+			console.error(`Failed to fetch post detail:`, text);
+			return new Response(JSON.stringify({ error: errorMessage }), { 
+				status: res.status, 
+				headers: { 'Content-Type': 'application/json' } 
+			});
 		}
 
 		const data = await res.json();

@@ -10,18 +10,19 @@ export const GET: RequestHandler = async ({ url }) => {
 		const res = await fetch(mediaUrl, {
 			headers: {
 				'Accept': '*/*',
-				'Connection': 'keep-alive'
+				'Connection': 'keep-alive',
+				'Referer': 'https://www.tumblr.com/',
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 			},
 			redirect: 'follow'
 		});
 
 		if (!res.ok) {
-			console.error(`[Media Proxy] Remote server returned ${res.status} for ${mediaUrl}`);
-			
 			// Try one last desperate attempt with a very generic User-Agent if raw fails
 			const retryRes = await fetch(mediaUrl, {
 				headers: {
-					'User-Agent': 'Mozilla/5.0'
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+					'Referer': 'https://www.tumblr.com/'
 				},
 				redirect: 'follow'
 			}).catch(() => null);

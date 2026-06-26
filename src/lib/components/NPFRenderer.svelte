@@ -4,6 +4,7 @@
 	import NPFText from "./NPFText.svelte";
 	import NPFAsk from "./NPFAsk.svelte";
 	import NPFRenderer from "./NPFRenderer.svelte";
+	import CachedMedia from "./CachedMedia.svelte";
 
 	let {
 		content = [],
@@ -18,7 +19,6 @@
 	}>();
 
 	let lightboxUrl = $state<string | null>(null);
-	let expandedImages = $state<Record<string, boolean>>({});
 
 	function openLightbox(url: string) {
 		lightboxUrl = url;
@@ -137,24 +137,20 @@
 			<div class="flex flex-row flex-wrap gap-2 my-6">
 				{#each block.blocks as subblock}
 					{@const imgUrl = subblock.type === 'image' ? (subblock.media?.[0]?.url || subblock.url) : null}
-					{@const isExpanded = imgUrl ? (expandedImages[imgUrl] || false) : false}
-					<div class="min-w-0 transition-all duration-300 {isExpanded ? 'w-full flex-none' : 'flex-1'}">
+					<div class="min-w-0 flex-1">
 						{#if subblock.type === "image"}
 							{#if imgUrl}
 								<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 								<div
-									class="select-none rounded-2xl overflow-hidden shadow-2xl bg-black border border-gray-800 relative group flex items-center justify-center transition-all duration-300 {isExpanded ? 'cursor-zoom-out w-full' : 'cursor-zoom-in h-full'}"
-									style={isExpanded ? "width: 100%; height: auto;" : "max-height: 75vh;"}
-									onclick={() => { 
-										expandedImages = { ...expandedImages, [imgUrl]: !isExpanded }; 
-										console.log("Row image clicked. URL:", imgUrl, "New state:", !isExpanded);
-									}}
+									class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
+									style="max-height: 40vh;"
+									onclick={() => openLightbox(imgUrl)}
 								>
-									<img
-										src={imgUrl}
+									<CachedMedia
+										url={imgUrl}
 										alt="Post content"
-										class="select-none block transition-all duration-300 {isExpanded ? 'w-full h-auto max-w-full' : 'max-w-full max-h-[75vh] object-contain'}"
-										loading="lazy"
+										class="select-none block object-contain w-full h-full"
+										style="max-height: 40vh;"
 									/>
 									{#if subblock.attribution}
 										<a
@@ -192,7 +188,7 @@
 				{/each}
 			</svelte:element>
 		{:else if block.type === "text"}
-			<div class="px-2" style="margin-left: {(block.indent_level || 0) * 20}px">
+			<div class="px-4 md:px-8 max-w-3xl mx-auto w-full" style="margin-left: {(block.indent_level || 0) * 20}px">
 				{#if block.subtype === "heading1"}
 					<h1 class="text-4xl font-black text-white mb-4 tracking-tight leading-tight">
 						<NPFText text={block.text} formatting={block.formatting} />
@@ -224,28 +220,23 @@
 				{/if}
 			</div>
 		{:else if block.type === "image"}
-			{@const imgUrl = block.media?.[0]?.url || block.url}
-			{@const isExpanded = expandedImages[imgUrl] || false}
+			{@const mediaArray = Array.isArray(block.media) ? block.media : (block.media ? [block.media] : [])}
+			{@const originalImg = mediaArray.find((m: any) => m.has_original_dimensions)}
+			{@const imgUrl = originalImg ? originalImg.url : (mediaArray[0]?.url || block.url)}
 			{#if imgUrl}
 				<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-				<div
-					class="select-none {fillHeight
-						? 'flex-1 min-w-0 w-full flex flex-col items-center justify-center bg-black transition-all duration-300 overflow-y-auto ' + (isExpanded ? 'cursor-zoom-out' : 'cursor-zoom-in overflow-hidden')
-						: 'rounded-2xl overflow-hidden shadow-2xl bg-black border border-gray-800 my-8 relative group flex items-center justify-center mx-auto transition-all duration-300 ' + (isExpanded ? 'cursor-zoom-out w-full' : 'cursor-zoom-in')} "
-					style={fillHeight
-						? ""
-						: (isExpanded ? "width: 100%; height: auto; max-width: 100%;" : "max-height: 75vh; width: fit-content; min-width: 50%;")}
-					onclick={() => { 
-						expandedImages = { ...expandedImages, [imgUrl]: !isExpanded }; 
-						console.log("Standalone image clicked. URL:", imgUrl, "New state:", !isExpanded);
-					}}
-				>
-					<img
-						src={imgUrl}
-						alt="Post content"
-						class={`select-none object-contain block transition-all duration-300 ${isExpanded ? 'w-full h-auto max-w-full' : (fillHeight ? 'max-w-full max-h-full' : 'max-w-full max-h-[75vh]')}`}
-						loading="lazy"
-					/>
+				<div class="max-w-3xl mx-auto px-4 md:px-8 w-full">
+					<div
+						class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center mx-auto transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
+						style="max-height: 60vh; width: 100%; aspect-ratio: auto;"
+						onclick={() => openLightbox(imgUrl)}
+					>
+						<CachedMedia
+							url={imgUrl}
+							alt="Post content"
+							class="select-none block object-contain w-full h-full"
+							style="max-height: 60vh;"
+						/>
 					{#if block.attribution}
 						<a
 							href={block.attribution.url}
@@ -258,6 +249,7 @@
 								"Link"}
 						</a>
 					{/if}
+					</div>
 				</div>
 				{#if block.caption}
 					<p
@@ -268,14 +260,18 @@
 				{/if}
 			{/if}
 		{:else if block.type === "video"}
-			{@const vidUrl = block.media?.[0]?.url || block.url}
+			{@const mediaArray = Array.isArray(block.media) ? block.media : (block.media ? [block.media] : [])}
+			{@const originalVid = mediaArray.find((m: any) => m.has_original_dimensions)}
+			{@const vidUrl = originalVid ? originalVid.url : (mediaArray[0]?.url || block.url)}
 			{#if vidUrl}
 				<div class="rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video my-8 relative group border border-gray-800 max-h-[75vh]">
 					{#if block.media?.[0]?.type === "video/mp4" || vidUrl.includes(".mp4")}
-						<!-- svelte-ignore a11y_media_has_caption -->
-						<video controls class="w-full h-full object-contain">
-							<source src={vidUrl} type={block.media?.[0]?.type || "video/mp4"} />
-						</video>
+						<CachedMedia
+							url={vidUrl}
+							type={block.media?.[0]?.type || "video/mp4"}
+							posterUrl={block.poster?.[0]?.url || block.thumbnail_url || ""}
+							class="w-full h-full object-contain"
+						/>
 					{:else}
 						<iframe src={vidUrl} class="w-full h-full" title="Video content" allowfullscreen></iframe>
 					{/if}
@@ -296,8 +292,8 @@
 				class="block p-6 bg-gray-900 rounded-2xl border border-gray-800 hover:border-primary transition-all group my-6 shadow-xl"
 			>
 				{#if block.poster && block.poster[0]}
-					<img
-						src={block.poster[0].url}
+					<CachedMedia
+						url={block.poster[0].url}
 						alt=""
 						class="w-full h-64 object-cover rounded-xl mb-4 shadow-lg"
 					/>

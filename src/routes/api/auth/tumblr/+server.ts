@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth, tokenSecretsMap } from '$lib/server/oauth';
 import { redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
@@ -13,7 +14,8 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 	const authHeader = oauth.toHeader(oauth.authorize(requestData));
 
-	const response = await fetch(requestData.url, {
+	await checkRateLimit();
+		const response = await fetch(requestData.url, {
 		method: requestData.method,
 		headers: {
 			...authHeader,

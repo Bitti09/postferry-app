@@ -1,3 +1,4 @@
+import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth } from '$lib/server/oauth';
 import type { RequestHandler } from './$types';
 
@@ -31,6 +32,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		formData.append('id', postId.toString());
 		formData.append('reblog_key', reblogKey);
 
+		await checkRateLimit();
 		const res = await fetch(url, {
 			method: 'POST',
 			headers: { 

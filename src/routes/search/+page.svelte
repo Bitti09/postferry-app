@@ -2,7 +2,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
-	import { downloadAndCacheMedia, getAllMediaUrls, isMediaCached } from '$lib/stores/db';
+	import { cacheAllVisible } from '$lib/cacheUtils';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
@@ -54,20 +54,10 @@
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
 
-	async function cacheAllVisible() {
+	async function startCacheAll() {
 		if (downloadingAll) return;
-		const urls = getAllMediaUrls(filteredPosts);
-		if (urls.length === 0) return;
-
 		downloadingAll = true;
-		downloadProgress = { done: 0, total: urls.length };
-
-		for (const url of urls) {
-			if (!(await isMediaCached(url))) {
-				await downloadAndCacheMedia(url);
-			}
-			downloadProgress.done++;
-		}
+		await cacheAllVisible(filteredPosts, (p) => { downloadProgress = p; });
 		downloadingAll = false;
 	}
 
@@ -217,7 +207,7 @@
 
 					<button 
 						class="btn btn-sm btn-primary gap-2"
-						onclick={cacheAllVisible}
+						onclick={startCacheAll}
 						disabled={downloadingAll || isOffline || filteredPosts.length === 0}
 					>
 						{#if downloadingAll}
@@ -244,7 +234,7 @@
 		/>
 	</div>
 
-	{#if error}
+	{#if error && !isOffline}
 		<div class="alert alert-error mb-8 rounded-3xl shadow-xl">
 			<span class="font-bold">{error}</span>
 		</div>
