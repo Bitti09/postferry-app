@@ -5,7 +5,7 @@ import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
-		const { account, blogName, postId, before_timestamp } = await request.json();
+		const { account, blogName, postId, before_timestamp, before, npf } = await request.json();
 
 		if (!account || !account.token || !account.secret) {
 			return new Response('Invalid account payload', { status: 400 });
@@ -23,16 +23,17 @@ export const POST: RequestHandler = async ({ request }) => {
 			id: postId.toString(),
 			notes_info: true,
 			reblog_info: true,
-			npf: true
+			npf: npf !== false
 		};
-		if (before_timestamp) {
-			params.before_timestamp = before_timestamp.toString();
+		const beforeCursor = before ?? before_timestamp;
+		if (beforeCursor) {
+			params.before = Number(beforeCursor);
 		}
 		const data = await client.blogPosts(blogName, params);
 
 		const post = data.posts?.[0];
 		return new Response(JSON.stringify({ 
-			post: before_timestamp ? undefined : post,
+			post: beforeCursor ? undefined : post,
 			notes: post?.notes || [],
 			liked: post?.liked ?? false,
 			response: data

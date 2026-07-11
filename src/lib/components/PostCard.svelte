@@ -45,6 +45,7 @@
 			primary,
 			primaryType,
 			posterUrl,
+			previewUrl: posterUrl || primary || images[0] || '',
 			allUrls,
 			isVideo: videos.length > 0,
 			isImage: images.length > 0,
@@ -147,14 +148,32 @@
 	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-3/4 shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
 >
 	{#if mediaInfo.primary && !mediaFailed}
-		<CachedMedia
-			url={mediaInfo.primary}
-			type={mediaInfo.primaryType}
-			posterUrl={mediaInfo.posterUrl}
-			alt={post.summary || 'Tumblr Post'}
-			class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-			onUnavailable={() => { mediaFailed = true; }}
-		/>
+		{#if mediaInfo.isVideo}
+			{#if mediaInfo.previewUrl}
+				<img
+					src={mediaInfo.previewUrl}
+					alt={post.summary || 'Tumblr Post video preview'}
+					class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+					loading="lazy"
+					decoding="async"
+					onerror={() => { mediaFailed = true; }}
+				/>
+			{:else}
+				<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
+					<p class="text-sm text-gray-400">Video</p>
+				</div>
+			{/if}
+		{:else}
+			<CachedMedia
+				url={mediaInfo.primary}
+				type={mediaInfo.primaryType}
+				posterUrl={mediaInfo.posterUrl}
+				thumbnailMode={true}
+				alt={post.summary || 'Tumblr Post'}
+				class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+				onUnavailable={() => { mediaFailed = true; }}
+			/>
+		{/if}
 	{:else}
 		<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
 			<p class="text-sm text-gray-400 line-clamp-6">{@html post.summary || post.body || 'Post without media'}</p>

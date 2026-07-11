@@ -2,13 +2,14 @@
 	import { settings } from "$lib/stores/settings";
 	import { getCachedBlobUrl, downloadAndCacheMedia } from "$lib/stores/db";
 
-	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', onUnavailable } = $props<{
+	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', thumbnailMode = false, onUnavailable } = $props<{
 		url: string;
 		type?: string;
 		alt?: string;
 		class?: string;
 		style?: string;
 		posterUrl?: string;
+		thumbnailMode?: boolean;
 		onUnavailable?: () => void;
 	}>();
 
@@ -19,10 +20,24 @@
 		!u.startsWith('blob:') &&
 		!u.startsWith('data:') &&
 		!u.startsWith('/api/media/proxy?url=');
+	const isLikelyVideo = (t: string | undefined, u: string | undefined) => {
+		const mime = (t || '').toLowerCase();
+		const href = (u || '').toLowerCase();
+		return (
+			mime === 'video' ||
+			mime.startsWith('video/') ||
+			href.includes('.mp4') ||
+			href.includes('.webm') ||
+			href.includes('.m3u8')
+		);
+	};
+	let isVideoMedia = $derived(isLikelyVideo(type, url));
 
 	let localUrl = $state<string | null>(null);
 	let forceProxy = $state(false);
 	let mediaUnavailable = $state(false);
+	let triedProxy = $state(false);
+	let triedDirect = $state(false);
 	let srcUrl = $derived.by(() => {
 		const base = localUrl || url;
 		return forceProxy && canProxy(base) ? toProxyUrl(base) : base;
@@ -41,12 +56,22 @@
 		
 		let isSubscribed = true;
 		localUrl = null;
-		forceProxy = false;
+		forceProxy = canProxy(url);
+		triedProxy = forceProxy;
+		triedDirect = isVideoMedia ? true : !forceProxy;
 		mediaUnavailable = false;
 		
 		// Fast path: if URL is a blob: URL or data: URL, use directly
 		if (url.startsWith('blob:') || url.startsWith('data:')) {
 			if (isSubscribed) localUrl = url;
+			triedDirect = true;
+			triedProxy = false;
+			return () => { isSubscribed = false; };
+		}
+
+		// Keep video src stable to avoid first-frame/control flicker from async src swaps.
+		// We still allow proxy/direct fallback through onerror, but skip late cache replacement.
+		if (isVideoMedia) {
 			return () => { isSubscribed = false; };
 		}
 		
@@ -75,7 +100,12 @@
 		
 		let isSubscribed = true;
 		localPosterUrl = null;
-		forcePosterProxy = false;
+		forcePosterProxy = isVideoMedia && canProxy(posterUrl);
+
+		// Keep video poster stable to avoid flicker from async poster URL swapping.
+		if (isVideoMedia) {
+			return () => { isSubscribed = false; };
+		}
 		
 		if ($settings.autoCacheMedia) {
 			getCachedBlobUrl(posterUrl).then(async cached => {
@@ -102,7 +132,7 @@
 	});
 </script>
 
-{#if type === 'video' || type === 'video/mp4'}
+{#if isVideoMedia}
 	<!-- svelte-ignore a11y_media_has_caption -->
 	{#if mediaUnavailable}
 		<div class={className} {style}>
@@ -110,6 +140,30 @@
 				Media unavailable
 			</div>
 		</div>
+	{:else if thumbnailMode}
+		{#if resolvedPosterUrl || posterUrl}
+			<img
+				src={resolvedPosterUrl || posterUrl}
+				{alt}
+				class={className}
+				{style}
+				loading="lazy"
+				decoding="async"
+				onerror={() => {
+					if (!forcePosterProxy && canProxy(posterUrl)) {
+						forcePosterProxy = true;
+						return;
+					}
+					mediaUnavailable = true;
+				}}
+			/>
+		{:else}
+			<div class={className} {style}>
+				<div class="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center text-gray-300 text-xs font-semibold text-center px-3">
+					Video
+				</div>
+			</div>
+		{/if}
 	{:else}
 		<video
 			src={srcUrl}
@@ -119,11 +173,12 @@
 			controls
 			preload="metadata"
 			onerror={() => {
-				if (!forceProxy && canProxy(srcUrl)) {
+				if (!triedProxy && canProxy(url)) {
 					forceProxy = true;
-				} else {
-					mediaUnavailable = true;
+					triedProxy = true;
+					return;
 				}
+				mediaUnavailable = true;
 			}}
 		></video>
 	{/if}
@@ -143,11 +198,17 @@
 			loading="lazy"
 			decoding="async"
 			onerror={() => {
-				if (!forceProxy && canProxy(srcUrl)) {
+				if (!triedProxy && canProxy(url)) {
 					forceProxy = true;
-				} else {
-					mediaUnavailable = true;
+					triedProxy = true;
+					return;
 				}
+				if (!triedDirect) {
+					forceProxy = false;
+					triedDirect = true;
+					return;
+				}
+				mediaUnavailable = true;
 			}}
 		/>
 	{/if}

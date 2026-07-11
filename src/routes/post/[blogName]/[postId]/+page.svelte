@@ -22,6 +22,94 @@
 	let notesLoading = $state(false);
 	let notesHasMore = $state(false);
 	let notesBeforeTimestamp = $state<number | null>(null);
+	let noteTotalsLoading = $state(false);
+	let noteTotals = $state({ likes: 0, reblogs: 0, comments: 0, processed: 0, complete: false });
+	let noteTotalsRun = 0;
+
+	function summarizeNotes(list: any[]) {
+		let likes = 0;
+		let reblogs = 0;
+		let comments = 0;
+		for (const note of list) {
+			if (note?.type === 'like') likes++;
+			if (note?.type === 'reblog') reblogs++;
+			if (note?.type === 'reply' || note?.reply_text) comments++;
+		}
+		return { likes, reblogs, comments };
+	}
+
+	async function loadAllNoteTotals(account: any, initialNotes: any[], initialBeforeTimestamp: number | null) {
+		if (!post || !account || !initialBeforeTimestamp) return;
+		const runId = ++noteTotalsRun;
+		noteTotalsLoading = true;
+
+		const seen = new Set<string>(initialNotes.map((n) => `${n.blog_name}_${n.timestamp}_${n.type || ''}`));
+		const base = summarizeNotes(initialNotes);
+		let likes = base.likes;
+		let reblogs = base.reblogs;
+		let comments = base.comments;
+		let processed = initialNotes.length;
+		let cursor = initialBeforeTimestamp;
+
+		try {
+			let guard = 0;
+			while (cursor && guard < 500) {
+				guard++;
+				const res = await fetch(`/api/posts/detail`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						account,
+						blogName,
+						postId,
+						before_timestamp: cursor
+					})
+				});
+				if (!res.ok) break;
+				const data = await res.json();
+				const batch: any[] = data.notes || [];
+				if (runId !== noteTotalsRun) return;
+				if (batch.length === 0) break;
+
+				for (const note of batch) {
+					const key = `${note.blog_name}_${note.timestamp}_${note.type || ''}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					processed++;
+					if (note?.type === 'like') likes++;
+					if (note?.type === 'reblog') reblogs++;
+					if (note?.type === 'reply' || note?.reply_text) comments++;
+				}
+
+				cursor = batch[batch.length - 1]?.timestamp ?? null;
+				noteTotals = {
+					likes,
+					reblogs,
+					comments,
+					processed,
+					complete: processed >= (post?.note_count ?? processed)
+				};
+
+				if (processed >= (post?.note_count ?? processed)) break;
+			}
+
+			if (runId === noteTotalsRun) {
+				noteTotals = {
+					likes,
+					reblogs,
+					comments,
+					processed,
+					complete: true
+				};
+			}
+		} catch (e) {
+			console.error('Failed to aggregate note totals:', e);
+		} finally {
+			if (runId === noteTotalsRun) {
+				noteTotalsLoading = false;
+			}
+		}
+	}
 
 	// Tracking like/reblog status for active accounts
 	let accountLikes = $state<Record<string, boolean>>({});
@@ -67,6 +155,12 @@
 				notesBeforeTimestamp = notes[notes.length - 1]?.timestamp ?? null;
 			}
 
+			noteTotals = {
+				...summarizeNotes(notes),
+				processed: notes.length,
+				complete: (primary.post?.note_count ?? 0) <= notes.length
+			};
+
 			// Seed like/reblog state from each account's own response
 			const initialLikes: Record<string, boolean> = {};
 			const initialReblogs: Record<string, boolean> = {};
@@ -83,6 +177,10 @@
 
 			accountLikes = initialLikes;
 			rebloggedAccounts = initialReblogs;
+
+			if (notesHasMore && notesBeforeTimestamp) {
+				loadAllNoteTotals(activeAccs[0], notes, notesBeforeTimestamp);
+			}
 		} catch (err: any) {
 			error = err.message;
 		} finally {
@@ -152,8 +250,8 @@
 	let reblogNotes = $derived(notes.filter(n => n.type === 'reblog'));
 	let reblogWithComment = $derived(reblogNotes.filter(n => n.added_text));
 	let likeNotes = $derived(notes.filter(n => n.type === 'like'));
-	// Comments = explicit replies + reblogs that added text
-	let commentNotes = $derived([...replies, ...reblogWithComment].filter(
+	// Comments = explicit reply notes.
+	let commentNotes = $derived(replies.filter(
 		(n, i, arr) => arr.findIndex(x => x.timestamp === n.timestamp && x.blog_name === n.blog_name) === i
 	));
 
@@ -181,6 +279,16 @@
 				const existingKeys = new Set(notes.map(n => `${n.blog_name}_${n.timestamp}`));
 				const unique = newNotes.filter(n => !existingKeys.has(`${n.blog_name}_${n.timestamp}`));
 				notes = [...notes, ...unique];
+				if (unique.length > 0) {
+					const add = summarizeNotes(unique);
+					noteTotals = {
+						likes: noteTotals.likes + add.likes,
+						reblogs: noteTotals.reblogs + add.reblogs,
+						comments: noteTotals.comments + add.comments,
+						processed: noteTotals.processed + unique.length,
+						complete: noteTotals.complete
+					};
+				}
 				notesBeforeTimestamp = newNotes[newNotes.length - 1]?.timestamp ?? null;
 				notesHasMore = unique.length > 0 && notes.length < (post?.note_count ?? 0);
 			}
@@ -210,6 +318,82 @@
 	let rootBlogName = $derived(post?.reblogged_root_name || trailFirst?.blog?.name);
 	let rootName = $derived(rootBlogName || trailFirst?.broken_blog_name);
 	let rootId = $derived(post?.reblogged_root_id || trailFirst?.post?.id);
+
+	let publishedAt = $derived(post?.timestamp ? new Date(post.timestamp * 1000) : null);
+	let publishedDateLabel = $derived(publishedAt ? publishedAt.toLocaleDateString() : 'Unknown');
+	let publishedTimeLabel = $derived(publishedAt ? publishedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+	let loadedNotesCount = $derived(notes.length);
+	let totalNotesCount = $derived(post?.note_count ?? 0);
+	let effectiveReblogCount = $derived(noteTotals.complete ? noteTotals.reblogs : Math.max(post?.reblog_count ?? 0, noteTotals.reblogs, reblogNotes.length));
+	let effectiveLikeCount = $derived(noteTotals.complete ? noteTotals.likes : Math.max(post?.like_count ?? 0, noteTotals.likes, likeNotes.length));
+	let loadedCommentCount = $derived(noteTotals.complete ? noteTotals.comments : Math.max(noteTotals.comments, commentNotes.length));
+	let postUrl = $derived(post?.post_url || post?.short_url || null);
+	let sourceUrl = $derived(post?.source_url || null);
+	let sourceTitle = $derived(post?.source_title || null);
+	let npfTestLoading = $state(false);
+	let npfTestResult = $state<any>(null);
+	let npfTestRaw = $state<any>(null);
+
+	async function runNpfTestFetch() {
+		const activeAccs = $accounts.filter(a => a.active);
+		if (activeAccs.length === 0) {
+			npfTestResult = { ok: false, error: 'No active account selected.' };
+			return;
+		}
+
+		npfTestLoading = true;
+		npfTestResult = null;
+		npfTestRaw = null;
+		try {
+			const payloadBase = {
+				account: activeAccs[0],
+				blogName,
+				postId
+			};
+
+			const [resNpf, resLegacy] = await Promise.all([
+				fetch('/api/posts/detail', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ ...payloadBase, npf: true })
+				}),
+				fetch('/api/posts/detail', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ ...payloadBase, npf: false })
+				})
+			]);
+
+			const [dataNpf, dataLegacy] = await Promise.all([resNpf.json(), resLegacy.json()]);
+			npfTestRaw = {
+				npfTrue: dataNpf,
+				npfFalse: dataLegacy
+			};
+
+			const testedPost = dataNpf?.post || dataNpf?.response?.posts?.[0] || null;
+			const legacyPost = dataLegacy?.post || dataLegacy?.response?.posts?.[0] || null;
+			const identical = JSON.stringify(dataNpf) === JSON.stringify(dataLegacy);
+			npfTestResult = {
+				ok: resNpf.ok && resLegacy.ok,
+				statusNpf: resNpf.status,
+				statusLegacy: resLegacy.status,
+				identicalResponse: identical,
+				hasPost: !!testedPost,
+				hasNpfContent: Array.isArray(testedPost?.content),
+				contentBlocks: Array.isArray(testedPost?.content) ? testedPost.content.length : 0,
+				legacyHasContent: Array.isArray(legacyPost?.content),
+				legacyContentBlocks: Array.isArray(legacyPost?.content) ? legacyPost.content.length : 0,
+				hasTrail: Array.isArray(testedPost?.trail),
+				trailItems: Array.isArray(testedPost?.trail) ? testedPost.trail.length : 0,
+				notesReturned: Array.isArray(dataNpf?.notes) ? dataNpf.notes.length : 0
+			};
+		} catch (e: any) {
+			npfTestResult = { ok: false, error: e?.message || 'NPF test fetch failed.' };
+			npfTestRaw = { error: e?.message || 'NPF test fetch failed.' };
+		} finally {
+			npfTestLoading = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -276,7 +460,7 @@
 								<a href="/blog/{post.blog_name}" class="text-sm font-black text-white truncate hover:text-primary transition-colors block">{post.blog_name}</a>
 								<div class="flex items-center gap-1.5 text-gray-500 mt-1">
 									<Clock size={12} />
-									<span class="text-[11px] font-bold leading-none">{new Date(post.timestamp * 1000).toLocaleDateString()}</span>
+									<span class="text-[11px] font-bold leading-none">{publishedDateLabel} {publishedTimeLabel ? `• ${publishedTimeLabel}` : ''}</span>
 								</div>
 							</div>
 						</div>
@@ -312,6 +496,49 @@
 								{/each}
 							</div>
 						{/if}
+
+						<!-- Useful API metadata summary -->
+						<div class="mt-5 rounded-2xl border border-gray-800/70 bg-black/30 p-4 space-y-3">
+							<div class="flex items-center justify-between">
+								<span class="text-[10px] font-black uppercase tracking-[0.18em] text-gray-500">Post Metadata</span>
+								<span class="text-[10px] font-mono text-gray-600">ID {post.id_string || post.id}</span>
+							</div>
+
+							<div class="grid grid-cols-2 gap-2">
+								<div class="rounded-lg border border-gray-800 bg-black/30 px-2 py-1.5">
+									<div class="text-[9px] uppercase font-black tracking-widest text-gray-600">Notes</div>
+									<div class="text-xs font-bold text-white">{loadedNotesCount}/{totalNotesCount}</div>
+								</div>
+								<div class="rounded-lg border border-gray-800 bg-black/30 px-2 py-1.5">
+									<div class="text-[9px] uppercase font-black tracking-widest text-gray-600">Reblogs</div>
+									<div class="text-xs font-bold text-white">{effectiveReblogCount}</div>
+								</div>
+							</div>
+
+							<div class="rounded-lg border border-gray-800 bg-black/30 px-2 py-1.5">
+								<div class="text-[9px] uppercase font-black tracking-widest text-gray-600">Published</div>
+								<div class="text-xs font-bold text-white">{publishedDateLabel}{publishedTimeLabel ? ` • ${publishedTimeLabel}` : ''}</div>
+							</div>
+
+							<div class="flex flex-wrap gap-1.5">
+								{#if post.state}<span class="text-[9px] uppercase font-black tracking-wider px-1.5 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700">{post.state}</span>{/if}
+								{#if post.format}<span class="text-[9px] uppercase font-black tracking-wider px-1.5 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700">{post.format}</span>{/if}
+								{#if post.is_nsfw}<span class="text-[9px] uppercase font-black tracking-wider px-1.5 py-1 rounded bg-red-900/30 text-red-300 border border-red-800/60">NSFW</span>{/if}
+								{#if post.note_count !== undefined && post.note_count !== null}<span class="text-[9px] uppercase font-black tracking-wider px-1.5 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700">counted notes</span>{/if}
+							</div>
+
+							<div class="space-y-1.5">
+								{#if postUrl}
+									<a href={postUrl} target="_blank" rel="noopener noreferrer" class="block text-[11px] text-primary hover:underline truncate">Open on Tumblr</a>
+								{/if}
+								{#if sourceUrl}
+									<a href={sourceUrl} target="_blank" rel="noopener noreferrer" class="block text-[11px] text-gray-400 hover:text-white hover:underline truncate">Source: {sourceTitle || sourceUrl}</a>
+								{/if}
+								{#if post.slug}
+									<div class="text-[10px] text-gray-600 truncate">slug: {post.slug}</div>
+								{/if}
+							</div>
+						</div>
 					</div>
 
 					<!-- Interaction Section -->
@@ -432,7 +659,7 @@
 					>
 						<Repeat2 size={14} class="mb-1" />
 						<span>Reblogs</span>
-						<span class="text-[8px] opacity-60">{post.reblog_count ?? reblogNotes.length}{notesHasMore ? '+' : ''}</span>
+						<span class="text-[8px] opacity-60">{effectiveReblogCount}{(notesHasMore || noteTotalsLoading) && !noteTotals.complete ? '+' : ''}</span>
 					</button>
 					<button 
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'notes' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
@@ -440,7 +667,7 @@
 					>
 						<Heart size={14} class="mb-1" />
 						<span>Likes</span>
-						<span class="text-[8px] opacity-60">{post.like_count ?? likeNotes.length}{notesHasMore ? '+' : ''}</span>
+						<span class="text-[8px] opacity-60">{effectiveLikeCount}{(notesHasMore || noteTotalsLoading) && !noteTotals.complete ? '+' : ''}</span>
 					</button>
 					<button 
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'comments' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
@@ -448,7 +675,7 @@
 					>
 						<MessageSquare size={14} class="mb-1" />
 						<span>Comments</span>
-						<span class="text-[8px] opacity-60">{commentNotes.length}{notesHasMore ? '+' : ''}</span>
+						<span class="text-[8px] opacity-60">{loadedCommentCount}{(notesHasMore || noteTotalsLoading) && !noteTotals.complete ? '+' : ''}</span>
 					</button>
 				</div>
 
@@ -636,14 +863,21 @@
 	<div class="fixed inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
 		<button
 			type="button"
-			class="absolute inset-0"
+			class="absolute inset-0 z-0"
 			onclick={() => showDebug = false}
 			aria-label="Close debug modal"
 		></button>
-		<div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl">
+		<div class="relative z-10 bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl">
 			<div class="flex items-center justify-between p-4 border-b border-gray-800">
 				<h3 class="text-lg font-bold text-white tracking-widest uppercase">API Response Debug</h3>
 				<div class="flex items-center gap-2">
+					<button class="btn btn-sm btn-outline border-primary/50 text-primary hover:text-white hover:bg-primary/20" onclick={runNpfTestFetch} disabled={npfTestLoading}>
+						{#if npfTestLoading}
+							<span class="loading loading-spinner loading-xs"></span>
+						{:else}
+							Test NPF
+						{/if}
+					</button>
 					<button class="btn btn-sm btn-outline border-gray-700 text-gray-300 hover:text-white" onclick={() => {
 						navigator.clipboard.writeText(JSON.stringify(post, null, 2));
 						const btn = document.getElementById('copy-json-btn');
@@ -653,6 +887,34 @@
 				</div>
 			</div>
 			<div class="p-4 overflow-y-auto flex-1 custom-scrollbar group relative">
+				{#if npfTestResult}
+					<div class="mb-4 rounded-xl border border-gray-700 bg-black/40 p-3 text-xs">
+						<div class="font-black uppercase tracking-widest text-[10px] text-gray-400 mb-2">NPF Test Result</div>
+						{#if npfTestResult.error}
+							<div class="text-red-400">{npfTestResult.error}</div>
+						{:else}
+							<div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-gray-300">
+								<div>ok: <span class="text-white font-bold">{String(npfTestResult.ok)}</span></div>
+								<div>statusNpf: <span class="text-white font-bold">{npfTestResult.statusNpf}</span></div>
+								<div>statusLegacy: <span class="text-white font-bold">{npfTestResult.statusLegacy}</span></div>
+								<div>identical: <span class="text-white font-bold">{String(npfTestResult.identicalResponse)}</span></div>
+								<div>hasNpfContent: <span class="text-white font-bold">{String(npfTestResult.hasNpfContent)}</span></div>
+								<div>contentBlocks: <span class="text-white font-bold">{npfTestResult.contentBlocks}</span></div>
+								<div>legacyHasContent: <span class="text-white font-bold">{String(npfTestResult.legacyHasContent)}</span></div>
+								<div>legacyContentBlocks: <span class="text-white font-bold">{npfTestResult.legacyContentBlocks}</span></div>
+								<div>hasTrail: <span class="text-white font-bold">{String(npfTestResult.hasTrail)}</span></div>
+								<div>trailItems: <span class="text-white font-bold">{npfTestResult.trailItems}</span></div>
+								<div>notesReturned: <span class="text-white font-bold">{npfTestResult.notesReturned}</span></div>
+							</div>
+						{/if}
+					</div>
+				{/if}
+				{#if npfTestRaw}
+					<div class="mb-4 rounded-xl border border-primary/30 bg-black/40 p-3 text-xs">
+						<div class="font-black uppercase tracking-widest text-[10px] text-primary mb-2">NPF Test Raw JSON</div>
+						<pre class="text-[10px] text-cyan-300 font-mono whitespace-pre-wrap break-all select-all">{JSON.stringify(npfTestRaw, null, 2)}</pre>
+					</div>
+				{/if}
 				<pre class="text-[11px] text-green-400 font-mono whitespace-pre-wrap break-all select-all">{JSON.stringify(post, null, 2)}</pre>
 			</div>
 		</div>
