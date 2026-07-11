@@ -145,8 +145,8 @@
 					<div class="min-w-0 flex-1">
 						{#if subblock.type === "image"}
 							{#if imgUrl}
-								<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-								<div
+								<button
+									type="button"
 									class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
 									style="max-height: 40vh;"
 									onclick={() => openLightbox(imgUrl)}
@@ -171,7 +171,7 @@
 												"Link"}
 										</a>
 									{/if}
-								</div>
+								</button>
 							{/if}
 						{:else}
 							<NPFRenderer content={[subblock]} />
@@ -229,9 +229,9 @@
 			{@const originalImg = mediaArray.find((m: any) => m.has_original_dimensions)}
 			{@const imgUrl = originalImg ? originalImg.url : (mediaArray[0]?.url || block.url)}
 			{#if imgUrl}
-				<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 				<div class="max-w-3xl mx-auto px-4 md:px-8 w-full">
-					<div
+					<button
+						type="button"
 						class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center mx-auto transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
 						style="max-height: 60vh; width: 100%; aspect-ratio: auto;"
 						onclick={() => openLightbox(imgUrl)}
@@ -254,7 +254,7 @@
 								"Link"}
 						</a>
 					{/if}
-					</div>
+					</button>
 				</div>
 				{#if block.caption}
 					<p

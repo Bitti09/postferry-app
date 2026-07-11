@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
 	import { getAllMediaUrls } from '$lib/mediaUrls';
+	import { bulkIsMediaCached } from '$lib/stores/db';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import { ArrowLeft, Heart } from 'lucide-svelte';
+	import { settings } from '$lib/stores/settings';
 
 	let blogName = $page.params.blogName;
 	
@@ -16,8 +18,19 @@
 	let hasMore = $state(true);
 	let beforeId: number | null = $state(null);
 	let error = $state('');
+	let fetchController: AbortController | null = null;
 	
-	let currentFilter = $state('all'); // all, photo, video, text
+	let currentFilter = $state('all');
+
+	$effect(() => {
+		const _filter = currentFilter; // track
+		untrack(() => {
+			if (fetchController && !fetchController.signal.aborted) {
+				fetchController.abort();
+				loadingPosts = false;
+			}
+		});
+	});
 
 	let activeAccount = $derived($accounts.find((a) => a.active));
 
@@ -41,14 +54,12 @@
 			return;
 		}
 	
-		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
-			bulkIsMediaCached(urls).then(found => {
-				cachedUrlSet = found;
-				cachedUrlsReady = true;
-			}).catch(() => {
-				cachedUrlSet = new Set();
-				cachedUrlsReady = true;
-			});
+		bulkIsMediaCached(urls).then(found => {
+			cachedUrlSet = found;
+			cachedUrlsReady = true;
+		}).catch(() => {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
 		});
 	});
 
@@ -111,11 +122,13 @@
 	async function loadPosts() {
 		if (!activeAccount || loadingPosts || !hasMore) return;
 		loadingPosts = true;
+		fetchController = new AbortController();
 
 		try {
 			const res = await fetch('/api/blog/posts', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				signal: fetchController.signal,
 				body: JSON.stringify({ account: activeAccount, blogName, before_id: beforeId })
 			});
 
@@ -138,14 +151,17 @@
 				}
 			}
 		} catch (err: any) {
+			if (err.name === 'AbortError') return;
 			error = err.message;
 		} finally {
-			loadingPosts = false;
+			if (fetchController && !fetchController.signal.aborted) {
+				loadingPosts = false;
+			}
 		}
 	}
 </script>
 
-<div class="min-h-screen p-4 md:p-8">
+<div class="min-h-screen p-4 md:p-8 bg-black">
 	<a href="/" class="btn btn-ghost mb-6 gap-2 text-white">
 		<ArrowLeft size={20} /> Back to Dashboard
 	</a>
@@ -206,7 +222,10 @@
 			<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
 		</div>
 	</div>
-	<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+	<main 
+		class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+		style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
+	>
 			{#each filteredPosts as post (post.id)}
 				<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
 			{/each}

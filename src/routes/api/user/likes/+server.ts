@@ -1,5 +1,6 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -14,37 +15,42 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		// Fetch from each account in parallel
 		const fetchPromises = accounts.map(async (account) => {
-			if (!account.token || !account.secret) return [];
-
-			const url = new URL('https://api.tumblr.com/v2/user/likes');
-			url.searchParams.set('limit', '20');
-			
-			const accountBefore = before?.[account.blogName];
-			if (accountBefore) {
-				url.searchParams.set('before', accountBefore.toString());
+			if (!account.token || !account.secret) {
+				return {
+					accountBlogName: account.blogName,
+					liked_posts: [],
+					response: null
+				};
 			}
 
-			const requestData = {
-				url: url.toString(),
-				method: 'GET'
-			};
-
-			const authHeader = oauth.toHeader(
-				oauth.authorize(requestData, { key: account.token, secret: account.secret })
-			);
-
-			await checkRateLimit();
-		const res = await fetch(requestData.url, {
-				headers: { ...authHeader }
+			const client = new Client({
+				consumer_key: TUMBLR_CONSUMER_KEY,
+				consumer_secret: TUMBLR_CONSUMER_SECRET,
+				token: account.token,
+				token_secret: account.secret
 			});
 
-			if (!res.ok) {
-				console.error(`Failed to fetch likes for account ${account.blogName}:`, await res.text());
-				return [];
+			const params: any = {
+				limit: 20,
+				npf: true,
+				reblog_info: true,
+				notes_info: true
+			};
+			const accountBefore = before?.[account.blogName];
+			if (accountBefore) {
+				params.before = accountBefore.toString();
 			}
 
-			const data = await res.json();
-			const accountLikes = data.response.liked_posts || [];
+			let accountLikes = [];
+			let accountResponse: any = null;
+			try {
+				await checkRateLimit();
+				const data = await client.userLikes(params);
+				accountResponse = data;
+				accountLikes = data.liked_posts || [];
+			} catch (error) {
+				console.error(`Failed to fetch likes for account ${account.blogName}:`, error);
+			}
 
 			// Track updated "before" timestamp for this account
 			if (accountLikes.length > 0) {
@@ -53,11 +59,15 @@ export const POST: RequestHandler = async ({ request }) => {
 				newBefore[account.blogName] = accountBefore;
 			}
 
-			return accountLikes;
+			return {
+				accountBlogName: account.blogName,
+				liked_posts: accountLikes,
+				response: accountResponse
+			};
 		});
 
 		const results = await Promise.all(fetchPromises);
-		const allLikes = results.flat();
+		const allLikes = results.flatMap((r) => r.liked_posts || []);
 
 		// Deduplicate by post ID
 		const uniqueLikesMap = new Map();
@@ -72,7 +82,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		return new Response(JSON.stringify({ 
 			liked_posts: sortedLikes,
-			newBefore
+			newBefore,
+			allLikedPosts: allLikes,
+			accountResponses: results
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});

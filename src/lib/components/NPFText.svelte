@@ -1,11 +1,25 @@
 <script lang="ts">
-	let { text = "", formatting = [] } = $props<{ text: string; formatting?: any[] }>();
+	type NpfFormat = {
+		type: 'bold' | 'italic' | 'strikethrough' | 'small' | 'link' | 'mention' | 'color' | string;
+		start: number;
+		end: number;
+		url?: string;
+		blog?: { name?: string };
+		hex?: string;
+	};
+
+	type TextSegment = {
+		text: string;
+		formats: NpfFormat[];
+	};
+
+	let { text = "", formatting = [] } = $props<{ text: string; formatting?: NpfFormat[] }>();
 
 	// Split text into segments based on formatting boundaries
 	let segments = $derived.by(() => {
-		if (!formatting || formatting.length === 0) return [{ text, formats: [] }];
+		if (!formatting || formatting.length === 0) return [{ text, formats: [] }] as TextSegment[];
 
-		const result = [];
+		const result: TextSegment[] = [];
 		const points = new Set([0, text.length]);
 		
 		for (const fmt of formatting) {
@@ -22,7 +36,7 @@
 			
 			const segmentText = text.substring(start, end);
 			// Find all formats that cover this segment
-			const segmentFormats = formatting.filter(f => f.start <= start && f.end >= end);
+			const segmentFormats = formatting.filter((f: NpfFormat) => f.start <= start && f.end >= end);
 			
 			result.push({ text: segmentText, formats: segmentFormats });
 		}

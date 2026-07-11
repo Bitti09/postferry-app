@@ -1,17 +1,22 @@
 import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, LinkBlock } from '$lib/types';
 import type { MediaExtraction } from '$lib/types';
 
+function toMediaArray(media?: MediaItem[] | MediaItem | null): MediaItem[] {
+	if (!media) return [];
+	return Array.isArray(media) ? media : [media];
+}
+
 /** Select the highest-quality media URL from a media array. */
-function pickBestMediaUrl(media?: MediaItem[]): string | null {
-	if (!media?.length) return null;
+function pickBestMediaUrl(media?: MediaItem[] | MediaItem | null): string | null {
+	const mediaArray = toMediaArray(media);
+	if (!mediaArray.length) return null;
 
-	const original = media.find((m) => m.has_original_dimensions);
-	if (original?.url) return original.url;
-
-	let largest = media[0];
-	for (let i = 1; i < media.length; i++) {
-		if ((media[i].width || 0) > (largest.width || 0)) {
-			largest = media[i];
+	let largest = mediaArray[0];
+	for (let i = 1; i < mediaArray.length; i++) {
+		const currentArea = (mediaArray[i].width || 0) * (mediaArray[i].height || 0);
+		const largestArea = (largest.width || 0) * (largest.height || 0);
+		if (currentArea > largestArea) {
+			largest = mediaArray[i];
 		}
 	}
 	return largest.url ?? null;
@@ -61,9 +66,11 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 				}
 				if (!primary) primary = posterUrl ?? vidUrl ?? '';
 			} else if (isLinkBlock(block)) {
-				if (block.url) {
-					urls.add(block.url);
-					if (!primary) primary = block.url;
+				const posterUrl = pickBestMediaUrl(block.poster);
+				if (posterUrl) {
+					urls.add(posterUrl);
+					images.add(posterUrl);
+					if (!primary) primary = posterUrl;
 				}
 			}
 		}
@@ -176,7 +183,7 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 			videos: [...new Set([...result.videos, ...trailResult.videos])],
 			images: [...new Set([...result.images, ...trailResult.images])],
 			posters: [...new Set([...result.posters, ...trailResult.posters])],
-			primary: result.primary ?? trailResult.primary
+			primary: result.primary || trailResult.primary
 		};
 	}
 
@@ -186,12 +193,20 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 	}
 
 	// Ensure clean output
+	const preferredPrimary =
+		result.images[0] ||
+		result.posters[0] ||
+		result.videos[0] ||
+		result.primary ||
+		result.urls[0] ||
+		'';
+
 	const cleaned: MediaExtraction = {
 		urls: result.urls.filter(Boolean),
 		videos: result.videos.filter(Boolean),
 		images: result.images.filter(Boolean),
 		posters: result.posters.filter(Boolean),
-		primary: result.primary
+		primary: preferredPrimary
 	};
 
 	setCached(key, cleaned);
@@ -216,6 +231,11 @@ export function getVideoUrls(post: TumblrPost): string[] {
 /** Get all image URLs from a post. */
 export function getImageUrls(post: TumblrPost): string[] {
 	return extractMedia(post).images;
+}
+
+/** Get all poster/thumbnail URLs from a post (mostly video posters). */
+export function getPosterUrls(post: TumblrPost): string[] {
+	return extractMedia(post).posters;
 }
 
 /** Clear the extraction cache (useful for testing or memory pressure). */

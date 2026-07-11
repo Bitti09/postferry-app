@@ -2,10 +2,14 @@ import { writable } from "svelte/store";
 
 interface Settings {
     autoCacheMedia: boolean;
+    mediaColumns: string;
+    blogCardColumns: string;
 }
 
 const defaultSettings: Settings = {
-    autoCacheMedia: false
+    autoCacheMedia: false,
+    mediaColumns: 'auto',
+    blogCardColumns: 'auto'
 };
 
 function createSettingsStore() {

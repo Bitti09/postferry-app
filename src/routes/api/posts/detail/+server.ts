@@ -1,70 +1,54 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
-		const { account, blogName, postId } = await request.json();
+		const { account, blogName, postId, before_timestamp } = await request.json();
 
 		if (!account || !account.token || !account.secret) {
 			return new Response('Invalid account payload', { status: 400 });
 		}
 
-		const url = new URL(`https://api.tumblr.com/v2/blog/${blogName}/posts`);
-		url.searchParams.set('id', postId.toString());
-		url.searchParams.set('notes_info', 'true');
-		url.searchParams.set('reblog_info', 'true');
-		url.searchParams.set('npf', 'true');
-
-		const requestData = {
-			url: url.toString(),
-			method: 'GET'
-		};
-
-		const authHeader = oauth.toHeader(
-			oauth.authorize(requestData, { key: account.token, secret: account.secret })
-		);
-
-		await checkRateLimit();
-		const res = await fetch(requestData.url, {
-			headers: { ...authHeader }
+		const client = new Client({
+			consumer_key: TUMBLR_CONSUMER_KEY,
+			consumer_secret: TUMBLR_CONSUMER_SECRET,
+			token: account.token,
+			token_secret: account.secret
 		});
 
-		if (!res.ok) {
-			const text = await res.text();
-			let errorMessage = 'Error fetching post from Tumblr';
-			try {
-				const errorJson = JSON.parse(text);
-				if (errorJson.errors && errorJson.errors[0]?.detail) {
-					errorMessage = errorJson.errors[0].detail;
-				} else if (errorJson.meta?.msg) {
-					errorMessage = errorJson.meta.msg;
-				}
-				if (res.status === 404) {
-					errorMessage = 'This post could not be found. It may have been deleted or the blog may be private.';
-				}
-			} catch (e) {
-				// Fallback to text
-				if (res.status === 404) errorMessage = 'Post not found.';
-			}
-			console.error(`Failed to fetch post detail:`, text);
-			return new Response(JSON.stringify({ error: errorMessage }), { 
-				status: res.status, 
-				headers: { 'Content-Type': 'application/json' } 
-			});
+		await checkRateLimit();
+		const params: any = {
+			id: postId.toString(),
+			notes_info: true,
+			reblog_info: true,
+			npf: true
+		};
+		if (before_timestamp) {
+			params.before_timestamp = before_timestamp.toString();
 		}
+		const data = await client.blogPosts(blogName, params);
 
-		const data = await res.json();
-		const post = data.response.posts[0];
+		const post = data.posts?.[0];
 		return new Response(JSON.stringify({ 
-			post,
+			post: before_timestamp ? undefined : post,
 			notes: post?.notes || [],
-			liked: post?.liked ?? false
+			liked: post?.liked ?? false,
+			response: data
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error) {
-		console.error('Detail Error:', error);
-		return new Response('Internal Server Error', { status: 500 });
+	} catch (error: any) {
+		console.error(`Failed to fetch post detail:`, error);
+		const status = error.statusCode || 500;
+		let errorMessage = error.message || 'Error fetching post from Tumblr';
+		if (status === 404) {
+			errorMessage = 'This post could not be found. It may have been deleted or the blog may be private.';
+		}
+		return new Response(JSON.stringify({ error: errorMessage }), { 
+			status, 
+			headers: { 'Content-Type': 'application/json' } 
+		});
 	}
 };

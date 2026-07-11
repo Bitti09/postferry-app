@@ -1,5 +1,6 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -18,63 +19,54 @@ export const POST: RequestHandler = async ({ request }) => {
 		console.log('Query Payload:', { query, before, type, account: account.blogName });
 
 		const cleanQuery = query.startsWith('#') ? query.substring(1) : query;
-		
-		const url = new URL('https://api.tumblr.com/v2/tagged');
-		url.searchParams.set('tag', cleanQuery);
-		if (before) {
-			url.searchParams.set('before', before.toString());
-		}
 
-		url.searchParams.set('limit', '20');
-		url.searchParams.set('npf', 'true');
-		if (type && type !== 'all') {
-			url.searchParams.set('type', type);
-		}
-
-		const requestData = {
-			url: url.toString(),
-			method: 'GET'
-		};
-
-		console.log(`[Backend Search API] Requesting Tumblr Endpoint: ${requestData.url}`);
-
-		const authHeader = oauth.toHeader(
-			oauth.authorize(requestData, { key: account.token, secret: account.secret })
-		);
-
-		console.log(`[Backend Search API] Auth Header keys:`, Object.keys(authHeader));
-
-		await checkRateLimit();
-		const res = await fetch(requestData.url, {
-			headers: { ...authHeader }
+		const client = new Client({
+			consumer_key: TUMBLR_CONSUMER_KEY,
+			consumer_secret: TUMBLR_CONSUMER_SECRET,
+			token: account.token,
+			token_secret: account.secret
 		});
 
-		if (!res.ok) {
-			const errorData = await res.text();
-			console.error(`[Backend Search API] Error response (${res.status}):`, errorData);
-			console.log('--- [Backend Search API] Request Failed ---\n');
-			return new Response(errorData, { status: res.status });
+		const params: any = {
+			limit: 20,
+			npf: true,
+			reblog_info: true,
+			notes_info: true
+		};
+		if (before) {
+			params.before = before.toString();
+		}
+		if (type && type !== 'all') {
+			params.type = type;
 		}
 
-		const data = await res.json();
-		
+		console.log(`[Backend Search API] Requesting Tumblr Endpoint: tagged tag=${cleanQuery}`);
+
+		await checkRateLimit();
+		const data = await client.taggedPosts(cleanQuery, params);
+
 		// Log the shape of the response
-		if (Array.isArray(data.response)) {
-			console.log(`[Backend Search API] Success! Received array with ${data.response.length} items`);
-		} else if (data.response?.posts) {
-			console.log(`[Backend Search API] Success! Received object with .posts array of length ${data.response.posts.length}`);
+		if (Array.isArray(data)) {
+			console.log(`[Backend Search API] Success! Received array with ${data.length} items`);
+		} else if (data?.posts) {
+			console.log(`[Backend Search API] Success! Received object with .posts array of length ${data.posts.length}`);
 		} else {
-			console.log(`[Backend Search API] Success! Received unknown response shape. Keys:`, Object.keys(data.response || {}));
+			console.log(`[Backend Search API] Success! Received unknown response shape. Keys:`, Object.keys(data || {}));
 		}
 
-		const posts = data.response?.posts || (Array.isArray(data.response) ? data.response : []);
-		
+		const posts = data?.posts || (Array.isArray(data) ? data : []);
+
 		console.log('--- [Backend Search API] Request Complete ---\n');
 
-		return new Response(JSON.stringify(posts), {
+		return new Response(JSON.stringify({
+			posts,
+			response: data
+		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
 	} catch (error: any) {
-		return new Response(error.message, { status: 500 });
+		console.error(`[Backend Search API] Error:`, error);
+		const status = error.statusCode || 500;
+		return new Response(error.message || 'Internal Server Error', { status });
 	}
 };

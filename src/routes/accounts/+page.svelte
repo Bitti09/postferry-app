@@ -32,7 +32,8 @@
 					body: JSON.stringify({ account: acc })
 				});
 				if (res.ok) {
-					const info = await res.json();
+					const payload = await res.json();
+					const info = payload.user || payload;
 					accountInfos[acc.blogName] = info;
 				}
 			});
@@ -187,7 +188,7 @@
 								<div class="avatar">
 									<div class="w-16 h-16 rounded-2xl ring-2 ring-gray-800 ring-offset-2 ring-offset-gray-900 overflow-hidden bg-gray-800">
 										{#if info}
-											<img src={`https://api.tumblr.com/v2/blog/${account.blogName}/avatar/128`} alt={account.blogName} />
+											<img src={`https://api.tumblr.com/v2/blog/${account.blogName}/avatar/512`} alt={account.blogName} />
 										{:else}
 											<div class="flex items-center justify-center h-full w-full">
 												<User size={32} class="text-gray-700" />

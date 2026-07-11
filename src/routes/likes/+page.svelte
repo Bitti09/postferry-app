@@ -2,9 +2,11 @@
 	import { onMount, untrack } from "svelte";
 	import { browser } from "$app/environment";
 	import { accounts } from "$lib/stores/accounts";
+	import { settings } from "$lib/stores/settings";
 	import { cacheAllVisible } from "$lib/cacheUtils";
 	import { filterPosts, type PostFilter } from "$lib/postFilter";
 	import { getAllMediaUrls } from '$lib/mediaUrls';
+	import { bulkIsMediaCached } from '$lib/stores/db';
 	import PostCard from "$lib/components/PostCard.svelte";
 	import LazyRender from "$lib/components/LazyRender.svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
@@ -27,11 +29,21 @@
 	let error = $state("");
 	let isOffline = $state(false);
 	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			}
+			activeSlideshowPostId = null;
+		}
+	});
 	
 	let fetchController: AbortController | null = null;
 	
 	let currentFilter = $state<PostFilter>("all");
-	let gridColumns = $state("auto");
 
 	const FILTERS: { value: PostFilter; label: string }[] = [
 		{ value: "all", label: "All" },
@@ -49,7 +61,6 @@
 
 	let initialMount = $state(true);
 	let prevAccountsStr = $state("");
-	let prevFilterStr = $state("");
 
 	export const snapshot = {
 		capture: () => ({
@@ -58,7 +69,6 @@
 			hasMore,
 			currentFilter,
 			prevAccountsStr,
-			prevFilterStr,
 		}),
 		restore: (value: any) => {
 			likes = value.likes || [];
@@ -66,7 +76,6 @@
 			hasMore = value.hasMore ?? true;
 			currentFilter = value.currentFilter || "all";
 			prevAccountsStr = value.prevAccountsStr || "";
-			prevFilterStr = value.prevFilterStr || "";
 		},
 	};
 
@@ -74,6 +83,7 @@
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
+	let consecutiveAutoFetches = 0;
 
 	// Pre-compute all cached URLs in a single batch check for all visible posts
 	let cachedUrlSet = $state<Set<string>>(new Set());
@@ -87,14 +97,12 @@
 			return;
 		}
 	
-		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
-			bulkIsMediaCached(urls).then(found => {
-				cachedUrlSet = found;
-				cachedUrlsReady = true;
-			}).catch(() => {
-				cachedUrlSet = new Set();
-				cachedUrlsReady = true;
-			});
+		bulkIsMediaCached(urls).then(found => {
+			cachedUrlSet = found;
+			cachedUrlsReady = true;
+		}).catch(() => {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
 		});
 	});
 
@@ -118,8 +126,12 @@
 			loading = false;
 			return;
 		}
-		if (loading && fetchController) {
-			fetchController.abort();
+		if (loading) {
+			if (reset && fetchController) {
+				fetchController.abort();
+			} else {
+				return;
+			}
 		}
 
 		fetchController = new AbortController();
@@ -178,22 +190,37 @@
 
 	// Auto-fetch to ensure the last row is perfectly filled
 	$effect(() => {
-		if (gridColumns !== "auto" && !loading && hasMore && filteredLikes.length > 0) {
-			const cols = parseInt(gridColumns);
+		if ($settings.mediaColumns !== "auto" && !loading && hasMore && filteredLikes.length > 0) {
+			const cols = parseInt($settings.mediaColumns);
 			if (filteredLikes.length % cols !== 0) {
-				// We have empty spots on the last row, fetch more!
-				loadLikes();
+				if (consecutiveAutoFetches < 2) {
+					consecutiveAutoFetches++;
+					loadLikes();
+				}
+			} else {
+				consecutiveAutoFetches = 0;
 			}
 		}
 	});
 
-	// Reactive reload when active accounts or filter change
+	// Abort any in-flight fetch immediately when the filter changes
+	$effect(() => {
+		const _filter = currentFilter; // track
+		untrack(() => {
+			if (fetchController && !fetchController.signal.aborted) {
+				fetchController.abort();
+				loading = false;
+			}
+			consecutiveAutoFetches = 0;
+		});
+	});
+
+	// Reactive reload only when active accounts change
 	$effect(() => {
 		const currentAccountsStr = activeAccounts
 			.map((a) => a.blogName)
 			.sort()
 			.join(",");
-		const currentFilterVal = currentFilter;
 
 		untrack(() => {
 			if (browser) {
@@ -201,20 +228,15 @@
 					initialMount = false;
 					if (
 						likes.length > 0 &&
-						currentAccountsStr === prevAccountsStr &&
-						currentFilterVal === prevFilterStr
+						currentAccountsStr === prevAccountsStr
 					) {
 						return; // Skip reload on initial mount if snapshot was restored and matches
 					}
 				}
 
 				prevAccountsStr = currentAccountsStr;
-				prevFilterStr = currentFilterVal;
 
 				if (activeAccounts.length > 0) {
-					console.log(
-						`[Favourites] Refreshing for ${activeAccounts.length} accounts...`,
-					);
 					loadLikes(true);
 				} else {
 					// Clear results
@@ -317,7 +339,7 @@
 					{/each}
 				</div>
 				<div class="flex items-center gap-2">
-					<select class="select select-bordered select-sm bg-gray-900 text-white border-gray-800" bind:value={gridColumns}>
+					<select class="select select-bordered select-sm bg-gray-900 text-white border-gray-800" bind:value={$settings.mediaColumns}>
 						<option value="auto">Auto Columns</option>
 						<option value="2">2 Columns</option>
 						<option value="3">3 Columns</option>
@@ -384,11 +406,11 @@
 		{:else}
 			<div class="flex-1 overflow-y-auto pr-2 pb-20">
 				<main 
-					class="grid gap-4 items-start {gridColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
-					style={gridColumns !== 'auto' ? `grid-template-columns: repeat(${gridColumns}, minmax(0, 1fr));` : ''}
+					class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+					style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
 				>
 					{#each filteredLikes as post (post.id)}
-										<div class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
+										<div id={"post-" + post.id} class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
 											<LazyRender>
 												<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
 											</LazyRender>
@@ -403,6 +425,7 @@
 
 <Slideshow
 	bind:active={slideshowActive}
+	bind:activePostId={activeSlideshowPostId}
 	posts={filteredLikes}
 	onReachEnd={async () => {
 		await loadLikes();

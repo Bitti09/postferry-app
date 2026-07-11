@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/environment';
+	import { settings } from '$lib/stores/settings';
 	import { accounts, accountsReady } from '$lib/stores/accounts';
-	import { addPostsToCache } from '$lib/stores/db';
+	import { addPostsToCache, bulkIsMediaCached } from '$lib/stores/db';
 	import { cacheAllVisible } from '$lib/cacheUtils';
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import { getAllMediaUrls } from '$lib/mediaUrls';
@@ -31,7 +32,20 @@
 	let accountOffsets: Record<string, string> = $state({});
 	let error = $state('');
 	let isOffline = $state(false);
+	let downloadingAll = $state(false);
+	let downloadProgress = $state({ done: 0, total: 0 });
 	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			}
+			activeSlideshowPostId = null;
+		}
+	});
 	
 	let fetchController: AbortController | null = null;
 	
@@ -41,23 +55,6 @@
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
 	let filteredPosts = $derived(filterPosts(posts, currentFilter));
-
-	// Pre-compute all cached URLs in a single batch check for all visible posts
-	let cachedUrls = $derived.by(() => {
-		const allPostUrls = filteredPosts.flatMap(p => getAllMediaUrls(p));
-		if (allPostUrls.length === 0) return [];
-	
-		// Use dynamic import to avoid circular deps
-		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
-			bulkIsMediaCached(allPostUrls).then(found => {
-				// Trigger re-evaluation by updating a dummy state
-				// Actually we can just use the set directly in a derived
-			});
-		});
-	
-		// We'll use a synchronous version for now - the async check will populate via effect
-		return allPostUrls; // temp - will be replaced by async check below
-	});
 
 	// Async computed cached URLs
 	let cachedUrlSet = $state<Set<string>>(new Set());
@@ -71,14 +68,12 @@
 			return;
 		}
 	
-		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
-			bulkIsMediaCached(urls).then(found => {
-				cachedUrlSet = found;
-				cachedUrlsReady = true;
-			}).catch(() => {
-				cachedUrlSet = new Set();
-				cachedUrlsReady = true;
-			});
+		bulkIsMediaCached(urls).then(found => {
+			cachedUrlSet = found;
+			cachedUrlsReady = true;
+		}).catch(() => {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
 		});
 	});
 
@@ -104,8 +99,12 @@
 			return;
 		}
 
-		if (loading && fetchController) {
-			fetchController.abort();
+		if (loading) {
+			if (reset && fetchController) {
+				fetchController.abort();
+			} else {
+				return;
+			}
 		}
 
 		fetchController = new AbortController();
@@ -162,17 +161,32 @@
 		}
 	}
 
-	// Reactive reload when active accounts or filter change
+	// Filter is server-side: abort any in-flight fetch then reload with new filter
 	$effect(() => {
-		const deps = { accounts: activeAccounts, filter: currentFilter };
-		
+		const _filter = currentFilter; // track
+		untrack(() => {
+			if (fetchController && !fetchController.signal.aborted) {
+				fetchController.abort();
+				loading = false;
+			}
+			if (browser && activeAccounts.length > 0) {
+				loadPosts(true);
+			}
+		});
+	});
+
+	// Reactive reload when active accounts change
+	$effect(() => {
+		const _accounts = activeAccounts; // track
 		untrack(() => {
 			if (browser) {
+				if (fetchController && !fetchController.signal.aborted) {
+					fetchController.abort();
+					loading = false;
+				}
 				if (activeAccounts.length > 0) {
-					console.log(`[Dashboard] Refreshing for ${activeAccounts.length} accounts...`);
 					loadPosts(true);
 				} else {
-					// Just clear results if no accounts active
 					posts = [];
 					loading = false;
 					hasMore = false;
@@ -312,11 +326,16 @@
 					</div>
 				{/if}
 
-				<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+				<main 
+					class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+					style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
+				>
 									{#each filteredPosts as post (post.id)}
-										<LazyRender>
-											<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
-										</LazyRender>
+										<div id={"post-" + post.id}>
+											<LazyRender>
+												<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
+											</LazyRender>
+										</div>
 									{/each}
 								</main>
 
@@ -332,6 +351,7 @@
 
 <Slideshow 
 	bind:active={slideshowActive} 
+	bind:activePostId={activeSlideshowPostId}
 	posts={filteredPosts} 
 	onReachEnd={async () => { await loadPosts(false); }} 
 />

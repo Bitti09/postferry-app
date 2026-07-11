@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import { ArrowLeft, Filter } from 'lucide-svelte';
+	import { settings } from '$lib/stores/settings';
 
 	let blogName = $page.params.blogName;
 	
@@ -13,8 +14,19 @@
 	let hasMore = $state(true);
 	let beforeTimestamp: number | null = $state(null);
 	let error = $state('');
+	let fetchController: AbortController | null = null;
 	
 	let currentFilter = $state('all');
+
+	$effect(() => {
+		const _filter = currentFilter; // track
+		untrack(() => {
+			if (fetchController && !fetchController.signal.aborted) {
+				fetchController.abort();
+				loading = false;
+			}
+		});
+	});
 
 	let activeAccount = $derived($accounts.find((a) => a.active));
 	
@@ -38,11 +50,13 @@
 	async function loadLikes() {
 		if (!activeAccount || loading || !hasMore) return;
 		loading = true;
+		fetchController = new AbortController();
 
 		try {
 			const res = await fetch('/api/blog/likes', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				signal: fetchController.signal,
 				body: JSON.stringify({ account: activeAccount, blogName, before: beforeTimestamp })
 			});
 
@@ -69,15 +83,18 @@
 				}
 			}
 		} catch (err: any) {
+			if (err.name === 'AbortError') return;
 			error = err.message;
-			hasMore = false; // Kill the loop on 403/Forbidden or any other error
+			hasMore = false;
 		} finally {
-			loading = false;
+			if (fetchController && !fetchController.signal.aborted) {
+				loading = false;
+			}
 		}
 	}
 </script>
 
-<div class="min-h-screen p-4 md:p-8">
+<div class="min-h-screen p-4 md:p-8 bg-black">
 	<a href={`/blog/${blogName}`} class="btn btn-ghost mb-6 gap-2 text-white">
 		<ArrowLeft size={20} /> Back to {blogName}
 	</a>
@@ -105,7 +122,10 @@
 			No posts match the current filter.
 		</div>
 	{:else}
-		<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+		<main 
+			class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
+		>
 			{#each filteredLikes as post (post.id)}
 				<PostCard {post} />
 			{/each}

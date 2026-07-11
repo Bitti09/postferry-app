@@ -1,5 +1,6 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -10,36 +11,25 @@ export const POST: RequestHandler = async ({ request }) => {
 			return new Response('Missing required parameters', { status: 400 });
 		}
 
-		const url = 'https://api.tumblr.com/v2/user/info';
-
-		const requestData = {
-			url,
-			method: 'GET'
-		};
-
-		const authHeader = oauth.toHeader(
-			oauth.authorize(requestData, { key: account.token, secret: account.secret })
-		);
+		const client = new Client({
+			consumer_key: TUMBLR_CONSUMER_KEY,
+			consumer_secret: TUMBLR_CONSUMER_SECRET,
+			token: account.token,
+			token_secret: account.secret
+		});
 
 		await checkRateLimit();
-		const res = await fetch(url, {
-			method: 'GET',
-			headers: { 
-				...authHeader
-			}
-		});
+		const data = await client.userInfo();
 
-		if (!res.ok) {
-			const errorText = await res.text();
-			return new Response(errorText, { status: res.status });
-		}
-
-		const data = await res.json();
-		return new Response(JSON.stringify(data.response.user), {
+		return new Response(JSON.stringify({
+			user: data.user,
+			response: data
+		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error) {
+	} catch (error: any) {
 		console.error('User Info Error:', error);
-		return new Response('Internal Server Error', { status: 500 });
+		const status = error.statusCode || 500;
+		return new Response(error.message || 'Internal Server Error', { status });
 	}
 };

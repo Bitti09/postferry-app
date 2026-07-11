@@ -1,5 +1,7 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
 import { oauth, tokenSecretsMap } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
@@ -57,26 +59,15 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		return new Response('Invalid access token response', { status: 500 });
 	}
 
-	// Fetch user info to get the blog name
-	const userInfoRequest = {
-		url: 'https://api.tumblr.com/v2/user/info',
-		method: 'GET'
-	};
-
-	const userInfoAuthHeader = oauth.toHeader(
-		oauth.authorize(userInfoRequest, { key: access_token, secret: access_token_secret })
-	);
-
-	const userInfoResponse = await fetch(userInfoRequest.url, {
-		headers: { ...userInfoAuthHeader }
+	const client = new Client({
+		consumer_key: TUMBLR_CONSUMER_KEY,
+		consumer_secret: TUMBLR_CONSUMER_SECRET,
+		token: access_token,
+		token_secret: access_token_secret
 	});
 
-	if (!userInfoResponse.ok) {
-		return new Response('Error fetching user info', { status: userInfoResponse.status });
-	}
-
-	const userInfoData = await userInfoResponse.json();
-	const blogName = userInfoData.response.user.name;
+	const userInfoData = await client.userInfo();
+	const blogName = userInfoData.user.name;
 
 	// Render an HTML page that saves the tokens to localStorage and redirects to /
 	const html = `

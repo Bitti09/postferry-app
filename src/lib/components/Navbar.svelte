@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Home, Image, Heart, Users, Search, Maximize, Minimize, Settings } from 'lucide-svelte';
+	import { Home, Image, Heart, Users, Search, Maximize, Minimize, Settings, UserCheck } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
 	let isFullscreen = $state(false);
@@ -47,6 +47,12 @@
 				<a href="/caches" class="{$page.url.pathname === '/caches' ? 'active bg-primary' : ''} transition-all">
 					<Image size={18} />
 					<span class="hidden sm:inline">Caches</span>
+				</a>
+			</li>
+			<li>
+				<a href="/following" class="{$page.url.pathname === '/following' ? 'active bg-primary' : ''} transition-all">
+					<UserCheck size={18} />
+					<span class="hidden sm:inline">Following</span>
 				</a>
 			</li>
 			<li>

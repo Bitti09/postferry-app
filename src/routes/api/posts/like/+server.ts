@@ -1,62 +1,45 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
+	let action = 'like';
 	try {
-		const { account, postId, reblogKey, action } = await request.json();
+		const { account, postId, reblogKey, action: reqAction } = await request.json();
+		if (reqAction) {
+			action = reqAction;
+		}
 
 		if (!account || !account.token || !account.secret || !postId || !reblogKey) {
 			return new Response('Missing required parameters', { status: 400 });
 		}
 
-		const endpoint = action === 'unlike' ? 'unlike' : 'like';
-		const url = `https://api.tumblr.com/v2/user/${endpoint}`;
-
-		const requestData = {
-			url,
-			method: 'POST',
-			data: {
-				id: postId,
-				reblog_key: reblogKey
-			}
-		};
-
-
-
-		const authHeader = oauth.toHeader(
-			oauth.authorize(requestData, { key: account.token, secret: account.secret })
-		);
-
-		const formData = new URLSearchParams();
-		formData.append('id', postId.toString());
-		formData.append('reblog_key', reblogKey);
+		const client = new Client({
+			consumer_key: TUMBLR_CONSUMER_KEY,
+			consumer_secret: TUMBLR_CONSUMER_SECRET,
+			token: account.token,
+			token_secret: account.secret
+		});
 
 		await checkRateLimit();
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 
-				...authHeader,
-				'Content-Type': 'application/x-www-form-urlencoded'
-			},
-			body: formData.toString()
-		});
 
-		if (!res.ok) {
-			const errorText = await res.text();
-			console.error(`Tumblr ${action} Error:`, errorText);
-			return new Response(errorText, { 
-				status: res.status,
-				headers: { 'Content-Type': 'application/json' }
-			});
+		let responseData;
+		if (action === 'unlike') {
+			responseData = await client.unlikePost(postId.toString(), reblogKey);
+		} else {
+			responseData = await client.likePost(postId.toString(), reblogKey);
 		}
 
-		const data = await res.json();
-		return new Response(JSON.stringify({ success: true, response: data }), {
+		return new Response(JSON.stringify({ success: true, response: responseData }), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error) {
-		console.error('Like Server Error:', error);
-		return new Response('Internal Server Error', { status: 500 });
+	} catch (error: any) {
+		console.error(`Tumblr ${action} Error:`, error);
+		const status = error.statusCode || 500;
+		return new Response(error.message || 'Internal Server Error', { 
+			status,
+			headers: { 'Content-Type': 'application/json' }
+		});
 	}
 };

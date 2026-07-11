@@ -1,5 +1,6 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -10,37 +11,46 @@ export const POST: RequestHandler = async ({ request }) => {
 			return new Response('Invalid account payload', { status: 400 });
 		}
 
-		const tryFetch = async (identifier: string) => {
-			const url = new URL(`https://api.tumblr.com/v2/blog/${identifier}/likes`);
-			url.searchParams.set('reblog_info', 'true');
-			url.searchParams.set('notes_info', 'true');
-			if (before) {
-				url.searchParams.set('before', before.toString());
-			}
+		const client = new Client({
+			consumer_key: TUMBLR_CONSUMER_KEY,
+			consumer_secret: TUMBLR_CONSUMER_SECRET,
+			token: account.token,
+			token_secret: account.secret
+		});
 
-			const requestData = { url: url.toString(), method: 'GET' };
-			const authHeader = oauth.toHeader(oauth.authorize(requestData, { key: account.token, secret: account.secret }));
-			return fetch(requestData.url, { headers: { ...authHeader } });
+		const tryFetch = async (identifier: string) => {
+			const params: any = {
+				npf: true,
+				reblog_info: true,
+				notes_info: true
+			};
+			if (before) {
+				params.before = before.toString();
+			}
+			await checkRateLimit();
+			return client.blogLikes(identifier, params);
 		};
 
-		let res = await tryFetch(blogName);
-
-		// Fallback: Try with .tumblr.com suffix
-		if (res.status === 404 && !blogName.includes('.')) {
-			res = await tryFetch(`${blogName}.tumblr.com`);
+		let data;
+		try {
+			data = await tryFetch(blogName);
+		} catch (error: any) {
+			if (error.statusCode === 404 && !blogName.includes('.')) {
+				data = await tryFetch(`${blogName}.tumblr.com`);
+			} else {
+				throw error;
+			}
 		}
 
-		if (!res.ok) {
-			const errorText = await res.text();
-			console.error(`Failed to fetch likes for ${blogName}:`, errorText);
-			return new Response(errorText, { status: res.status });
-		}
-
-		const data = await res.json();
-		return new Response(JSON.stringify({ liked_posts: data.response.liked_posts }), {
+		return new Response(JSON.stringify({
+			liked_posts: data.liked_posts || [],
+			response: data
+		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error) {
-		return new Response('Internal Server Error', { status: 500 });
+	} catch (error: any) {
+		console.error(`Failed to fetch likes:`, error);
+		const status = error.statusCode || 500;
+		return new Response(error.message || 'Internal Server Error', { status });
 	}
 };

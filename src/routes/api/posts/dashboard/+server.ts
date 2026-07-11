@@ -1,5 +1,6 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth } from '$lib/server/oauth';
+import { Client } from 'tumblr.js';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -14,43 +15,48 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		// Fetch from each account in parallel using its specific offset
 		const fetchPromises = accounts.map(async (account) => {
-			if (!account.token || !account.secret) return [];
-
-			const url = new URL('https://api.tumblr.com/v2/user/dashboard');
-			url.searchParams.set('limit', '20');
-			
-			if (type) {
-				url.searchParams.set('type', type);
+			if (!account.token || !account.secret) {
+				return {
+					accountBlogName: account.blogName,
+					posts: [],
+					response: null
+				};
 			}
-			
+
+			const client = new Client({
+				consumer_key: TUMBLR_CONSUMER_KEY,
+				consumer_secret: TUMBLR_CONSUMER_SECRET,
+				token: account.token,
+				token_secret: account.secret
+			});
+
+			const params: any = {
+				limit: 20,
+				npf: true,
+				reblog_info: true,
+				notes_info: true
+			};
+			if (type) {
+				params.type = type;
+			}
+
 			// Use the specific offset for this account if it exists
 			const accountOffset = offsets?.[account.blogName];
 			if (accountOffset) {
-				url.searchParams.set('before_id', accountOffset.toString());
+				params.before_id = accountOffset.toString();
 			}
 
-			const requestData = {
-				url: url.toString(),
-				method: 'GET'
-			};
-
-			const authHeader = oauth.toHeader(
-				oauth.authorize(requestData, { key: account.token, secret: account.secret })
-			);
-
-			await checkRateLimit();
-		const res = await fetch(requestData.url, {
-				headers: { ...authHeader }
-			});
-
-			if (!res.ok) {
-				console.error(`Failed to fetch for account ${account.blogName}:`, await res.text());
-				return [];
+			let accountPosts = [];
+			let accountResponse: any = null;
+			try {
+				await checkRateLimit();
+				const data = await client.userDashboard(params);
+				accountResponse = data;
+				accountPosts = data.posts || [];
+			} catch (error) {
+				console.error(`Failed to fetch dashboard for account ${account.blogName}:`, error);
 			}
 
-			const data = await res.json();
-			const accountPosts = data.response.posts || [];
-			
 			// Track the new offset for this specific account
 			if (accountPosts.length > 0) {
 				newOffsets[account.blogName] = accountPosts[accountPosts.length - 1].id.toString();
@@ -59,11 +65,15 @@ export const POST: RequestHandler = async ({ request }) => {
 				newOffsets[account.blogName] = accountOffset;
 			}
 
-			return accountPosts;
+			return {
+				accountBlogName: account.blogName,
+				posts: accountPosts,
+				response: accountResponse
+			};
 		});
 
 		const results = await Promise.all(fetchPromises);
-		const allPosts = results.flat();
+		const allPosts = results.flatMap((r) => r.posts || []);
 
 		// Deduplicate and sort
 		const uniquePostsMap = new Map();
@@ -77,7 +87,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		return new Response(JSON.stringify({ 
 			posts: sortedPosts,
-			newOffsets 
+			newOffsets,
+			allPosts,
+			accountResponses: results
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});

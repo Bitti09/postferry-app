@@ -4,7 +4,9 @@
 	import { accounts } from '$lib/stores/accounts';
 	import AvatarImage from '$lib/components/AvatarImage.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
+	import { getCachedBlogInfo, setCachedBlogInfo, getCachedFollowedBlogs, setCachedFollowedBlogs } from '$lib/stores/db';
 	import type { TumblrAccount } from '$lib/types';
+	import { settings } from '$lib/stores/settings';
 	import {
 		Users,
 		User,
@@ -15,7 +17,23 @@
 		Circle,
 		ChevronLeft,
 		ChevronRight,
+		Clock,
+		Heart,
+		Code
 	} from 'lucide-svelte';
+
+	let selectedDebugBlog = $state<any>(null);
+	let showPageDebug = $state(false);
+
+	function formatUpdated(timestamp?: number): string {
+		if (!timestamp) return 'No data';
+		const date = new Date(timestamp * 1000);
+		return date.toLocaleDateString('en-US', {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric'
+		});
+	}
 
 	let loading = $state(false);
 	let error = $state('');
@@ -24,12 +42,39 @@
 	let loadingFollowed = $state(false);
 	let followedError = $state('');
 	let hasMoreFollowed = $state(true);
+ 
+	type SortOption = 'default' | 'active_desc' | 'active_asc';
+	let currentSort = $state<SortOption>('default');
+
+	let sortedBlogs = $derived.by(() => {
+		if (currentSort === 'default') {
+			return followedBlogs;
+		}
+		return [...followedBlogs].sort((a, b) => {
+			const timeA = a.updated || 0;
+			const timeB = b.updated || 0;
+			if (currentSort === 'active_desc') {
+				return timeB - timeA;
+			} else {
+				return timeA - timeB;
+			}
+		});
+	});
 
 	let accountOffsets: Record<string, number> = $state({});
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
 	let initialMount = $state(true);
 	let prevAccountsStr = $state('');
+
+	onMount(async () => {
+		if (browser) {
+			const cached = await getCachedFollowedBlogs();
+			if (cached && cached.length > 0) {
+				followedBlogs = cached;
+			}
+		}
+	});
 
 	$effect(() => {
 		const currentAccountsStr = activeAccounts.map((a) => a.blogName).sort().join(',');
@@ -71,18 +116,23 @@
 		followedError = '';
 
 		if (reset) {
-			followedBlogs = [];
 			accountOffsets = {};
 			hasMoreFollowed = true;
 		}
 
 		try {
+			// Find which blogs we already have public likes details for
+			const cachedBlogNames = followedBlogs
+				.filter(b => b.share_likes !== undefined)
+				.map(b => b.name);
+
 			const res = await fetch('/api/user/following', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					accounts: activeAccounts,
 					offsets: accountOffsets,
+					cachedBlogNames
 				}),
 			});
 
@@ -98,7 +148,28 @@
 			if (blogs.length === 0) {
 				hasMoreFollowed = false;
 			} else {
-				const existingIds = new Set(followedBlogs.map((b) => b.name));
+				// Process and enrich blogs (server-side enriched or client-side cached lookup)
+				for (const blog of blogs) {
+					if (blog.share_likes !== undefined) {
+						// Server enriched it, cache it!
+						await setCachedBlogInfo(blog.name, {
+							share_likes: blog.share_likes,
+							likes: blog.likes,
+							updated: blog.updated,
+							cachedAt: Date.now()
+						});
+					} else {
+						// Retrieve from client cache
+						const cached = await getCachedBlogInfo(blog.name);
+						if (cached) {
+							blog.share_likes = cached.share_likes;
+							blog.likes = cached.likes;
+							if (cached.updated) blog.updated = cached.updated;
+						}
+					}
+				}
+
+				const existingIds = new Set(reset ? [] : followedBlogs.map((b) => b.name));
 				const uniqueNew = blogs.filter((b: any) => !existingIds.has(b.name));
 				
 				if (uniqueNew.length === 0 && blogs.length > 0) {
@@ -108,6 +179,9 @@
 				} else {
 					followedBlogs = reset ? uniqueNew : [...followedBlogs, ...uniqueNew];
 					accountOffsets = { ...accountOffsets, ...newOffsets };
+					
+					// Save the updated full list to IndexedDB
+					await setCachedFollowedBlogs(followedBlogs);
 				}
 			}
 		} catch (err: any) {
@@ -118,7 +192,7 @@
 	}
 </script>
 
-<div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 overflow-hidden">
+<div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
 	<header class="mb-8 shrink-0 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
@@ -147,8 +221,30 @@
 					</div>
 				{/each}
 
+				<select 
+					class="select select-bordered select-sm bg-gray-900 text-white border-gray-800 font-mono text-[11px] font-bold w-44" 
+					bind:value={currentSort}
+				>
+					<option value="default">Sort: Default</option>
+					<option value="active_desc">Sort: Recent Active ↓</option>
+					<option value="active_asc">Sort: Recent Active ↑</option>
+				</select>
+				<button 
+					class="btn btn-sm btn-outline btn-success gap-2" 
+					onclick={() => loadFollowed(true)}
+					disabled={loadingFollowed || activeAccounts.length === 0}
+				>
+					<RefreshCw size={16} class={loadingFollowed ? "animate-spin" : ""} /> Refresh
+				</button>
 				<button class="btn btn-sm btn-outline btn-info gap-2" onclick={handleAddAccount}>
 					<Users size={16} /> Add Account
+				</button>
+				<button 
+					class="btn btn-sm btn-outline btn-warning gap-2" 
+					onclick={() => showPageDebug = true}
+					disabled={followedBlogs.length === 0}
+				>
+					<Code size={16} /> API Response
 				</button>
 			</div>
 		</div>
@@ -185,27 +281,90 @@
 					<p class="text-sm">None of your active accounts are following anyone, or the API didn't return results.</p>
 				</div>
 			{:else}
-				<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-					{#each followedBlogs as blog (blog.name)}
-						<a
-							href={`/blog/${blog.name}`}
-							class="flex items-center gap-4 bg-gray-900 border border-gray-800 rounded-2xl p-4 hover:border-primary/50 transition-all group"
-						>
-							<div class="avatar shrink-0">
-								<div class="w-12 h-12 rounded-xl overflow-hidden bg-gray-800">
-									<AvatarImage blogName={blog.name} size={64} class="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+				<div 
+					class="grid gap-6 {$settings.blogCardColumns === 'auto' ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : ''}"
+					style={$settings.blogCardColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.blogCardColumns}, minmax(0, 1fr));` : ''}
+				>
+					{#each sortedBlogs as blog (blog.name)}
+						<!-- Card Wrapper -->
+						<div class="relative flex flex-col bg-gray-900 border border-gray-800 rounded-3xl p-6 hover:border-primary/40 hover:shadow-[0_10px_30px_rgba(0,0,0,0.5)] transition-all duration-300 group">
+							
+							<!-- Debug Button (Top-Right) -->
+							<button 
+								class="opacity-0 group-hover:opacity-100 transition-opacity btn btn-xs btn-circle btn-ghost text-gray-500 hover:text-white absolute top-4 right-4 z-10"
+								onclick={() => selectedDebugBlog = blog}
+								title="View Raw API JSON"
+							>
+								<Code size={14} />
+							</button>
+							
+							<!-- Main Blog Info Area -->
+							<div class="flex items-start gap-4 mb-4 select-none">
+								<div class="avatar shrink-0">
+									<div class="w-16 h-16 rounded-2xl overflow-hidden bg-gray-800 ring-2 ring-gray-800 transition-all duration-300">
+										<AvatarImage blogName={blog.name} size={128} class="w-full h-full object-cover" />
+									</div>
+								</div>
+								<div class="min-w-0 flex-1">
+									<div class="text-white font-black text-lg truncate tracking-tight leading-snug">
+										{blog.title || blog.name}
+									</div>
+									<div class="text-xs text-gray-500 font-bold truncate mt-0.5">@{blog.name}</div>
 								</div>
 							</div>
-							<div class="min-w-0 flex-1">
-								<div class="text-white font-semibold truncate group-hover:text-primary transition-colors">
-									{blog.title || blog.name}
+
+							<!-- Description -->
+							{#if blog.description}
+								<div class="text-xs text-gray-400 line-clamp-3 leading-relaxed mb-4 flex-1 select-none">
+									{blog.description.replace(/<[^>]*>/g, '')}
 								</div>
-								<div class="text-xs text-gray-500 truncate">{blog.name}</div>
-								{#if blog.description}
-									<div class="text-xs text-gray-600 truncate mt-0.5">{blog.description.replace(/<[^>]*>/g, '')}</div>
-								{/if}
+							{:else}
+								<div class="flex-1"></div>
+							{/if}
+
+							<!-- The Small Box (Stats & Links) -->
+							<div class="bg-black/60 border border-gray-800/80 rounded-2xl p-3.5 space-y-2.5">
+								<div class="flex items-center justify-between text-[11px] text-gray-400 font-bold font-mono">
+									<div class="flex items-center gap-1.5">
+										<Clock size={12} class="text-primary" />
+										<span>Last Active:</span>
+									</div>
+									<span class="text-white font-black">{formatUpdated(blog.updated)}</span>
+								</div>
+
+								<div class="flex items-center justify-between pt-1 border-t border-gray-800/50">
+									<div class="flex items-center gap-1.5 text-[11px] text-gray-400 font-bold font-mono">
+										<Heart size={12} class="text-pink-500" />
+										<span>Fav Count:</span>
+									</div>
+									{#if blog.likes !== undefined && blog.likes !== null}
+										<span class="text-white font-black font-mono text-[11px]">{blog.likes.toLocaleString()}</span>
+									{:else if blog.share_likes === false}
+										<span class="text-gray-600 font-black font-mono text-[10px] uppercase">Private</span>
+									{:else}
+										<span class="text-gray-500 font-black font-mono text-[10px] uppercase">--</span>
+									{/if}
+								</div>
+
+								<div class="pt-1.5 flex gap-2">
+									<a 
+										href={`/blog/${blog.name}`} 
+										class="btn btn-xs btn-outline border-gray-800 hover:bg-gray-800 text-gray-300 font-bold font-mono text-[10px] uppercase tracking-wider rounded-xl py-1.5 h-auto min-h-0 {blog.share_likes ? 'flex-1' : 'w-full text-center'}"
+									>
+										Feed
+									</a>
+									{#if blog.share_likes}
+										<a 
+											href={`/blog/${blog.name}/likes`} 
+											class="btn btn-xs btn-primary text-white font-bold font-mono text-[10px] uppercase tracking-wider rounded-xl flex-1 py-1.5 h-auto min-h-0 gap-1"
+										>
+											<Heart size={10} fill="currentColor" /> Favourites
+										</a>
+									{/if}
+								</div>
 							</div>
-						</a>
+
+						</div>
 					{/each}
 				</div>
 
@@ -214,3 +373,35 @@
 		{/if}
 	</div>
 </div>
+
+{#if selectedDebugBlog}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => selectedDebugBlog = null}>
+		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+			<div class="flex items-center justify-between border-b border-gray-800 pb-4 mb-4">
+				<h3 class="text-lg font-bold text-white font-mono">@{selectedDebugBlog.name} Raw API JSON</h3>
+				<button class="btn btn-sm btn-circle btn-ghost text-gray-400 hover:text-white" onclick={() => selectedDebugBlog = null}>✕</button>
+			</div>
+			<div class="flex-1 overflow-auto rounded-xl bg-black p-4 text-xs font-mono text-green-400 custom-scrollbar select-text leading-relaxed">
+				<pre class="whitespace-pre-wrap">{JSON.stringify(selectedDebugBlog, null, 2)}</pre>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if showPageDebug}
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => showPageDebug = false}>
+		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+			<div class="flex items-center justify-between border-b border-gray-800 pb-4 mb-4">
+				<h3 class="text-lg font-bold text-white font-mono">Page API Response ({followedBlogs.length} Blogs)</h3>
+				<button class="btn btn-sm btn-circle btn-ghost text-gray-400 hover:text-white" onclick={() => showPageDebug = false}>✕</button>
+			</div>
+			<div class="flex-1 overflow-auto rounded-xl bg-black p-4 text-xs font-mono text-green-400 custom-scrollbar select-text leading-relaxed">
+				<pre class="whitespace-pre-wrap">{JSON.stringify(followedBlogs, null, 2)}</pre>
+			</div>
+		</div>
+	</div>
+{/if}

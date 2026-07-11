@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
+	import { settings } from '$lib/stores/settings';
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import LazyRender from '$lib/components/LazyRender.svelte';
@@ -17,6 +18,18 @@
 	let paginationValue: number | null = $state(null);
 	let error = $state('');
 	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			}
+			activeSlideshowPostId = null;
+		}
+	});
+
 	let currentFilter = $state('all');
 	let isOffline = $state(false);
 
@@ -92,7 +105,8 @@
 				console.error(`[Search Debug] Request failed with status ${res.status}:`, errText);
 				throw new Error('Search failed: ' + errText);
 			}
-			const newPosts = await res.json();
+			const payload = await res.json();
+			const newPosts = Array.isArray(payload) ? payload : (payload.posts || []);
 			console.log(`[Search Debug] Received ${newPosts.length} posts from API.`);
 
 			if (newPosts.length === 0) {
@@ -231,11 +245,16 @@
 
 	<!-- Results Grid -->
 	{#if posts.length > 0}
-		<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+		<div 
+			class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
+		>
 			{#each filteredPosts as post (post.id)}
-				<LazyRender>
-					<PostCard {post} />
-				</LazyRender>
+				<div id={"post-" + post.id}>
+					<LazyRender>
+						<PostCard {post} />
+					</LazyRender>
+				</div>
 			{/each}
 		</div>
 
@@ -266,6 +285,7 @@
 {#if slideshowActive}
 	<Slideshow 
 		bind:active={slideshowActive} 
+		bind:activePostId={activeSlideshowPostId}
 		posts={filteredPosts} 
 		onReachEnd={() => performSearch(false)} 
 	/>

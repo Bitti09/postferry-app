@@ -18,6 +18,11 @@
 	let useGrid = $state(true);
 	let showDebug = $state(false);
 
+	// Notes pagination
+	let notesLoading = $state(false);
+	let notesHasMore = $state(false);
+	let notesBeforeTimestamp = $state<number | null>(null);
+
 	// Tracking like/reblog status for active accounts
 	let accountLikes = $state<Record<string, boolean>>({});
 	let rebloggedAccounts = $state<Record<string, boolean>>({});
@@ -54,6 +59,13 @@
 			const primary = results[0];
 			post = primary.post;
 			notes = primary.notes || [];
+
+			// Detect if more notes exist (API returns ≤50 at a time)
+			if (notes.length > 0) {
+				const total = primary.post?.note_count ?? 0;
+				notesHasMore = notes.length < total;
+				notesBeforeTimestamp = notes[notes.length - 1]?.timestamp ?? null;
+			}
 
 			// Seed like/reblog state from each account's own response
 			const initialLikes: Record<string, boolean> = {};
@@ -138,9 +150,49 @@
 	
 	let replies = $derived(notes.filter(n => n.type === 'reply' || n.reply_text));
 	let reblogNotes = $derived(notes.filter(n => n.type === 'reblog'));
+	let reblogWithComment = $derived(reblogNotes.filter(n => n.added_text));
 	let likeNotes = $derived(notes.filter(n => n.type === 'like'));
+	// Comments = explicit replies + reblogs that added text
+	let commentNotes = $derived([...replies, ...reblogWithComment].filter(
+		(n, i, arr) => arr.findIndex(x => x.timestamp === n.timestamp && x.blog_name === n.blog_name) === i
+	));
+
+	async function loadMoreNotes() {
+		if (notesLoading || !notesHasMore || !post) return;
+		const activeAccs = $accounts.filter(a => a.active);
+		if (activeAccs.length === 0) return;
+		notesLoading = true;
+		try {
+			const res = await fetch(`/api/posts/detail`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					account: activeAccs[0],
+					blogName,
+					postId,
+					before_timestamp: notesBeforeTimestamp
+				})
+			});
+			const data = await res.json();
+			const newNotes: any[] = data.notes || [];
+			if (newNotes.length === 0) {
+				notesHasMore = false;
+			} else {
+				const existingKeys = new Set(notes.map(n => `${n.blog_name}_${n.timestamp}`));
+				const unique = newNotes.filter(n => !existingKeys.has(`${n.blog_name}_${n.timestamp}`));
+				notes = [...notes, ...unique];
+				notesBeforeTimestamp = newNotes[newNotes.length - 1]?.timestamp ?? null;
+				notesHasMore = unique.length > 0 && notes.length < (post?.note_count ?? 0);
+			}
+		} catch (e) {
+			console.error('Failed to load more notes:', e);
+		} finally {
+			notesLoading = false;
+		}
+	}
 
 	// Count total media blocks across trail + post content
+	let reblogTextOnly = $state(false);
 	let mediaCount = $derived(() => {
 		if (!post) return 0;
 		const countBlocks = (blocks: any[]) =>
@@ -148,6 +200,16 @@
 		const trailCount = (post.trail || []).reduce((sum: number, item: any) => sum + countBlocks(item.content || []), 0);
 		return trailCount + countBlocks(post.content || []);
 	});
+
+	// Reblog header fallback values that gracefully handle broken trail items.
+	let trailFirst = $derived(post?.trail?.[0]);
+	let trailLast = $derived(post?.trail?.[post?.trail?.length - 1]);
+	let fromBlogName = $derived(post?.reblogged_from_name || trailLast?.blog?.name);
+	let fromName = $derived(fromBlogName || trailLast?.broken_blog_name || '[deleted blog]');
+	let fromId = $derived(post?.reblogged_from_id || trailLast?.post?.id);
+	let rootBlogName = $derived(post?.reblogged_root_name || trailFirst?.blog?.name);
+	let rootName = $derived(rootBlogName || trailFirst?.broken_blog_name);
+	let rootId = $derived(post?.reblogged_root_id || trailFirst?.post?.id);
 </script>
 
 <svelte:head>
@@ -306,17 +368,26 @@
 			<!-- MIDDLE COLUMN: Content Stage -->
 			<main class="h-full bg-black flex flex-col overflow-y-auto custom-scrollbar">
 				<div class="w-full flex flex-col pb-8">
-					{#if post.reblogged_from_name}
+					{#if fromName}
 						<div class="flex items-center gap-2 px-6 py-4 bg-gray-900 border-b border-gray-800 text-gray-400 text-sm">
 							<Repeat2 size={16} class="text-gray-500 shrink-0" />
 							<span class="font-medium">
 								<a href="/blog/{post.blog_name}" class="font-bold text-white hover:text-primary transition-colors">{post.blog_name}</a>
 								reblogged from 
-								<a href="/post/{post.reblogged_from_name}/{post.reblogged_from_id}" class="font-bold text-white hover:text-primary transition-colors">{post.reblogged_from_name}</a>
+								{#if fromId && fromBlogName}
+									<a href="/post/{fromBlogName}/{fromId}" class="font-bold text-white hover:text-primary transition-colors">{fromName}</a>
+								{:else}
+									<span class="font-bold text-gray-300">{fromName}</span>
+								{/if}
 								
-								{#if post.reblogged_root_name && post.reblogged_root_name !== post.reblogged_from_name && post.reblogged_root_name !== post.blog_name}
+								{#if rootName && rootName !== fromName && rootName !== post.blog_name}
 									<span class="opacity-75">
-										(originally by <a href="/post/{post.reblogged_root_name}/{post.reblogged_root_id}" class="font-bold text-white hover:text-primary transition-colors">{post.reblogged_root_name}</a>)
+										(originally by
+										{#if rootId && rootBlogName}
+											<a href="/post/{rootBlogName}/{rootId}" class="font-bold text-white hover:text-primary transition-colors">{rootName}</a>
+										{:else}
+											<span class="font-bold text-gray-300">{rootName}</span>
+										{/if})
 									</span>
 								{/if}
 							</span>
@@ -351,84 +422,162 @@
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'trail' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
 						onclick={() => activeTab = 'trail'}
 					>
-						<Quote size={14} class="mb-1" /> Trail
+						<Quote size={14} class="mb-1" />
+						<span>Trail</span>
+						{#if post.trail?.length > 0}<span class="text-[8px] opacity-60">{post.trail.length}</span>{/if}
 					</button>
 					<button 
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'reblog' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
 						onclick={() => activeTab = 'reblog'}
 					>
-						<Repeat2 size={14} class="mb-1" /> Reblogs
+						<Repeat2 size={14} class="mb-1" />
+						<span>Reblogs</span>
+						<span class="text-[8px] opacity-60">{post.reblog_count ?? reblogNotes.length}{notesHasMore ? '+' : ''}</span>
 					</button>
 					<button 
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'notes' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
 						onclick={() => activeTab = 'notes'}
 					>
-						<Heart size={14} class="mb-1" /> Likes
+						<Heart size={14} class="mb-1" />
+						<span>Likes</span>
+						<span class="text-[8px] opacity-60">{post.like_count ?? likeNotes.length}{notesHasMore ? '+' : ''}</span>
 					</button>
 					<button 
 						class="flex flex-col items-center justify-center py-4 font-black text-[9px] uppercase tracking-tighter transition-all border-b-2 {activeTab === 'comments' ? 'border-primary text-white bg-white/5' : 'border-transparent text-gray-500 hover:text-white'}"
 						onclick={() => activeTab = 'comments'}
 					>
-						<MessageSquare size={14} class="mb-1" /> Comments
+						<MessageSquare size={14} class="mb-1" />
+						<span>Comments</span>
+						<span class="text-[8px] opacity-60">{commentNotes.length}{notesHasMore ? '+' : ''}</span>
 					</button>
 				</div>
 
 				<div class="flex-1 overflow-y-auto custom-scrollbar p-6">
 					{#if activeTab === 'trail'}
-						<!-- Pure text trail for context -->
+						<!-- Full NPF trail with real content rendering -->
 						{#if post.trail && post.trail.length > 0}
-							<div class="space-y-6">
+							<div class="space-y-1">
 								{#each post.trail as item, i}
-									<div class="border-l-2 border-gray-800 pl-4 py-1">
-										<div class="flex items-center gap-2 mb-2">
-											<a href="/blog/{item.blog?.name}" class="avatar hover:opacity-80 transition-opacity">
-												<div class="w-6 h-6 rounded-md ring-1 ring-gray-800">
-													<AvatarImage blogName={item.blog?.name} size={64} />
+									{@const trailName = item.blog?.name || item.broken_blog_name || '[deleted blog]'}
+									{@const trailPostHref = item.post?.id && item.blog?.name ? `/post/${item.blog.name}/${item.post.id}` : null}
+									{@const trailBlogHref = item.blog?.name ? `/blog/${item.blog.name}` : null}
+									{@const trailHref = trailPostHref || trailBlogHref}
+									<!-- Trail entry: author header + full NPF content -->
+									<div class="rounded-2xl overflow-hidden border border-gray-800/60 bg-black/20">
+										<!-- Author bar -->
+										<div class="flex items-center gap-2.5 px-4 py-3 bg-black/40 border-b border-gray-800/40">
+											{#if trailHref}
+												<a href={trailHref} class="shrink-0">
+													<div class="w-7 h-7 rounded-lg overflow-hidden ring-1 ring-gray-700">
+														<AvatarImage blogName={trailName} size={64} />
+													</div>
+												</a>
+												<a href={trailHref} class="text-xs font-black text-primary hover:underline truncate">{trailName}</a>
+											{:else}
+												<div class="w-7 h-7 rounded-lg overflow-hidden ring-1 ring-gray-700 bg-gray-900 flex items-center justify-center text-[9px] font-black text-gray-500">
+													?
 												</div>
-											</a>
-											<a href="/blog/{item.blog?.name}" class="text-xs font-black text-primary uppercase hover:underline">{item.blog?.name}</a>
+												<span class="text-xs font-black text-gray-300 truncate">{trailName}</span>
+											{/if}
 											{#if i === 0}
-												<span class="px-1.5 py-0.5 rounded-md bg-primary/20 text-primary border border-primary/30 text-[9px] font-black uppercase tracking-widest leading-none">OP</span>
+												<span class="shrink-0 px-1.5 py-0.5 rounded bg-primary/20 text-primary border border-primary/30 text-[8px] font-black uppercase tracking-widest">OP</span>
+											{/if}
+											<span class="ml-auto shrink-0 text-[9px] text-gray-600 font-mono">{i + 1}/{post.trail.length}</span>
+											{#if trailPostHref}
+												<a href={trailPostHref} class="shrink-0 text-gray-600 hover:text-gray-400 transition-colors" title="Open post">
+													<Repeat2 size={11} />
+												</a>
 											{/if}
 										</div>
-										<div class="text-xs text-gray-400 italic line-clamp-4">
-											{#each item.content || [] as block}
-												{#if block.type === 'text'}{block.text} {/if}
-											{/each}
-										</div>
+										<!-- Full NPF content for this trail step -->
+										{#if item.content && item.content.length > 0}
+											<div class="py-3 [&_.npf-content]:space-y-3! [&_p]:text-sm! [&_p]:leading-relaxed! [&_p]:mb-0! [&_h1]:text-xl! [&_h2]:text-lg! [&_.max-w-3xl]:px-3! [&_.px-4]:px-3! [&_.px-8]:px-3! [&_.md\:px-8]:px-3!">
+												<NPFRenderer content={item.content} layout={item.layout} useGrid={false} />
+											</div>
+										{:else}
+											<p class="px-4 py-3 text-xs text-gray-600 italic">No content.</p>
+										{/if}
 									</div>
+									<!-- Arrow connector between trail steps -->
+									{#if i < post.trail.length - 1}
+										<div class="flex justify-center py-1 text-gray-700">
+											<svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor"><path d="M6 0v12M1 8l5 8 5-8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+										</div>
+									{/if}
 								{/each}
+								<!-- Final post marker -->
+								<div class="flex justify-center py-1 text-gray-700">
+									<svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor"><path d="M6 0v12M1 8l5 8 5-8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+								</div>
+								<div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/20">
+									<AvatarImage blogName={post.blog_name} size={64} class="w-6 h-6 rounded-md" />
+									<span class="text-xs font-black text-primary">{post.blog_name}</span>
+									<span class="text-[8px] text-primary/60 font-bold uppercase ml-1">this post</span>
+								</div>
 							</div>
 						{:else}
-							<div class="h-full flex items-center justify-center text-gray-600 italic text-sm">No trail available.</div>
+							<div class="h-full flex items-center justify-center text-gray-600 italic text-sm">No trail — this is an original post.</div>
 						{/if}
 
 					{:else if activeTab === 'reblog'}
-						<div class="space-y-3">
-							{#each reblogNotes as note}
-								<div class="flex items-center gap-3 p-2 bg-black/20 rounded-xl border border-gray-800/50">
-									<AvatarImage blogName={note.blog_name} size={64} class="w-8 h-8 rounded-md shrink-0" />
-									<div class="flex-1 min-w-0 flex flex-col justify-center">
-										<a href={note.post_id ? `/post/${note.blog_name}/${note.post_id}` : `/blog/${note.blog_name}`} class="text-xs font-bold text-white hover:text-primary transition-colors truncate">{note.blog_name}</a>
-										{#if note.reblog_parent_blog_name}
-											<div class="text-[10px] text-gray-500 truncate flex items-center gap-1 mt-0.5">
-												<span class="opacity-50">from</span> <a href="/blog/{note.reblog_parent_blog_name}" class="hover:text-gray-300 transition-colors font-medium">{note.reblog_parent_blog_name}</a>
-											</div>
+						<!-- Header with filter toggle -->
+						<div class="flex items-center justify-between mb-4">
+							<span class="text-[10px] font-black uppercase text-gray-600 tracking-widest">
+								{reblogTextOnly ? reblogNotes.filter(n => n.added_text || (n.tags && n.tags.length > 0)).length : reblogNotes.length} reblog{reblogNotes.length !== 1 ? 's' : ''}
+							</span>
+							<label class="flex items-center gap-2 cursor-pointer select-none">
+								<span class="text-[10px] text-gray-500 font-bold uppercase">With text/tags only</span>
+								<input type="checkbox" class="toggle toggle-xs toggle-primary" bind:checked={reblogTextOnly} />
+							</label>
+						</div>
+						<div class="space-y-2">
+							{#each reblogNotes.filter(n => !reblogTextOnly || n.added_text || (n.tags && n.tags.length > 0)) as note (note.blog_name + '_' + note.timestamp)}
+								{@const hasText = !!note.added_text}
+								{@const hasTags = !!(note.tags && note.tags.length > 0)}
+								{@const hasContent = hasText || hasTags}
+								<div class="rounded-xl border {hasContent ? 'border-primary/20 bg-primary/5' : 'border-gray-800/50 bg-black/20'} overflow-hidden">
+									<!-- Blog row -->
+									<div class="flex items-center gap-3 px-3 py-2">
+										<AvatarImage blogName={note.blog_name} size={64} class="w-7 h-7 rounded-md shrink-0" />
+										<div class="flex-1 min-w-0">
+											<a href={note.post_id ? `/post/${note.blog_name}/${note.post_id}` : `/blog/${note.blog_name}`}
+												class="text-xs font-bold text-white hover:text-primary transition-colors truncate block">{note.blog_name}</a>
+											{#if note.reblog_parent_blog_name}
+												<div class="text-[10px] text-gray-600 truncate">↳ from <a href="/blog/{note.reblog_parent_blog_name}" class="hover:text-gray-400 transition-colors">{note.reblog_parent_blog_name}</a></div>
+											{/if}
+										</div>
+										{#if note.post_id}
+											<a href="/post/{note.blog_name}/{note.post_id}" class="shrink-0 text-green-500 hover:text-green-400 p-1" title="View reblog">
+												<Repeat2 size={13} />
+											</a>
 										{/if}
 									</div>
-									{#if note.post_id}
-										<a href="/post/{note.blog_name}/{note.post_id}" class="text-green-500 hover:text-green-400 transition-colors shrink-0 p-1" title="View reblog">
-											<Repeat2 size={14} />
-										</a>
-									{:else}
-										<div class="shrink-0 p-1">
-											<Repeat2 size={12} class="text-green-500/50" />
+									<!-- Added text, if any -->
+									{#if hasText}
+										<div class="px-3 pb-2 pt-1 border-t border-primary/10">
+											<p class="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">{note.added_text}</p>
+										</div>
+									{/if}
+									<!-- Tags, if any -->
+									{#if hasTags}
+										<div class="px-3 pb-2 {hasText ? '' : 'pt-1 border-t border-primary/10'} flex flex-wrap gap-1">
+											{#each note.tags as tag}
+												<a href="/search?q=%23{encodeURIComponent(tag)}" 
+													class="text-[9px] font-bold text-gray-500 bg-gray-800/60 hover:bg-primary hover:text-white border border-gray-700/50 hover:border-primary px-1.5 py-0.5 rounded-md transition-all">
+													#{tag}
+												</a>
+											{/each}
 										</div>
 									{/if}
 								</div>
 							{/each}
-							{#if reblogNotes.length === 0}
-								<div class="py-12 text-center text-gray-600 italic text-sm">No reblogs yet.</div>
+							{#if reblogNotes.filter(n => !reblogTextOnly || n.added_text || (n.tags && n.tags.length > 0)).length === 0}
+								<div class="py-12 text-center text-gray-600 italic text-sm">{reblogTextOnly ? 'No reblogs with text or tags.' : 'No reblogs yet.'}</div>
+							{/if}
+							{#if notesHasMore}
+								<button class="w-full btn btn-sm btn-ghost text-gray-500 hover:text-white mt-2" onclick={loadMoreNotes} disabled={notesLoading}>
+									{#if notesLoading}<span class="loading loading-spinner loading-xs"></span>{:else}Load more…{/if}
+								</button>
 							{/if}
 						</div>
 
@@ -444,23 +593,36 @@
 							{#if likeNotes.length === 0}
 								<div class="py-12 text-center text-gray-600 italic text-sm">No likes yet.</div>
 							{/if}
+							{#if notesHasMore}
+								<button class="w-full btn btn-sm btn-ghost text-gray-500 hover:text-white mt-2" onclick={loadMoreNotes} disabled={notesLoading}>
+									{#if notesLoading}<span class="loading loading-spinner loading-xs"></span>{:else}Load more…{/if}
+								</button>
+							{/if}
 						</div>
 
 					{:else if activeTab === 'comments'}
 						<div class="space-y-4">
-							{#each replies as note}
+							{#each commentNotes as note}
 								<div class="p-4 bg-black/40 rounded-2xl border border-gray-800">
 									<div class="flex items-center gap-3 mb-3">
-										<img src={`https://api.tumblr.com/v2/blog/${note.blog_name}/avatar/64`} class="w-8 h-8 rounded-lg" alt="" />
-									<a href="/blog/{note.blog_name}" class="text-xs font-black text-white hover:text-primary transition-colors">{note.blog_name}</a>
+										<AvatarImage blogName={note.blog_name} size={64} class="w-8 h-8 rounded-lg" />
+										<div class="flex-1">
+											<a href="/blog/{note.blog_name}" class="text-xs font-black text-white hover:text-primary transition-colors">{note.blog_name}</a>
+											{#if note.type === 'reblog'}<span class="ml-2 text-[9px] text-green-500/70 font-bold uppercase">via reblog</span>{/if}
+										</div>
 									</div>
 									<p class="text-sm text-gray-300 bg-gray-900/50 p-3 rounded-xl border border-gray-800/50">
 										{note.reply_text || note.added_text || "Left a comment."}
 									</p>
 								</div>
 							{/each}
-							{#if replies.length === 0}
+							{#if commentNotes.length === 0}
 								<div class="py-12 text-center text-gray-600 italic text-sm">No comments found.</div>
+							{/if}
+							{#if notesHasMore}
+								<button class="w-full btn btn-sm btn-ghost text-gray-500 hover:text-white mt-2" onclick={loadMoreNotes} disabled={notesLoading}>
+									{#if notesLoading}<span class="loading loading-spinner loading-xs"></span>{:else}Load more…{/if}
+								</button>
 							{/if}
 						</div>
 					{/if}
@@ -471,9 +633,14 @@
 </div>
 
 {#if showDebug && dev}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onclick={() => showDebug = false}>
-		<div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+	<div class="fixed inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+		<button
+			type="button"
+			class="absolute inset-0"
+			onclick={() => showDebug = false}
+			aria-label="Close debug modal"
+		></button>
+		<div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl">
 			<div class="flex items-center justify-between p-4 border-b border-gray-800">
 				<h3 class="text-lg font-bold text-white tracking-widest uppercase">API Response Debug</h3>
 				<div class="flex items-center gap-2">

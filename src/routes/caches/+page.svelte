@@ -1,19 +1,20 @@
 <script lang="ts">
 	import { onMount, onDestroy } from "svelte";
+	import { settings } from "$lib/stores/settings";
 	import {
 		clearCache,
 		getMediaCacheStats,
-		getAllCachedMediaMeta,
-		getStore,
 	} from "$lib/stores/db";
+	import { getAllCachedMedia } from "$lib/stores/mediaCache";
 	import PostCard from "$lib/components/PostCard.svelte";
 	import LazyRender from "$lib/components/LazyRender.svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
-	import Lightbox from "$lib/components/Lightbox.svelte";
+	import Slideshow from "$lib/components/Slideshow.svelte";
 	import {
 		ArrowLeft,
 		Trash2,
-		HardDrive
+		HardDrive,
+		Play
 	} from "lucide-svelte";
 
 	let mediaItems: any[] = $state([]);
@@ -73,77 +74,23 @@
 		visibleCount = 40;
 	});
 
-	let lightboxActive = $state(false);
-	let lightboxIndex = $state(0);
-	
-	let lightboxItems = $derived.by(() => {
-		const filtered = mediaItems
-			.filter(item => {
-				if (currentFilter === "all") return true;
-				if (currentFilter === "photo") return item.type.startsWith("image/");
-				if (currentFilter === "video") return item.type.startsWith("video/");
-				return true;
-			})
-			.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
 
-		const deduplicated = [];
-		const seenHashes = new Set<string>();
-
-		for (const item of filtered) {
-			let isDuplicate = false;
-			if (item.originalUrl) {
-				const match = item.originalUrl.match(/tumblr_[a-zA-Z0-9]+/);
-				if (match) {
-					const hash = match[0];
-					if (seenHashes.has(hash)) {
-						isDuplicate = true;
-					} else {
-						seenHashes.add(hash);
-					}
-				}
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
 			}
-
-			if (!isDuplicate) {
-				deduplicated.push({ originalUrl: item.originalUrl, type: item.type, post: item.post, url: '' });
-			}
+			activeSlideshowPostId = null;
 		}
-
-		return deduplicated;
 	});
 
-	// Lazily load blob URLs for lightbox display
-	async function resolveLightboxBlob(index: number) {
-		const item = lightboxItems[index];
-		if (!item || item.url) return;
-		try {
-			const cached = await getStore(item.originalUrl, 'tumblr-media-cache', 'tumblr-media-blobs', 'blobs');
-			if (cached) {
-				const blob = cached.blob || cached;
-				item.url = URL.createObjectURL(blob);
-			}
-		} catch { /* ignore */ }
-	}
-
-		async function openSlideshow(post: any) {
-		const index = lightboxItems.findIndex(i => i.post && String(i.post.id) === String(post.id));
-		if (index !== -1) {
-			lightboxIndex = index;
-			lightboxActive = true;
-			await resolveLightboxBlob(index);
-		} else {
-			// Find by URL if post ID fails
-			const primaryUrl = post.photos?.[0]?.original_size?.url || post.video_url || post.id; // use ID as fallback for legacy cache
-			const fallbackIndex = lightboxItems.findIndex(i => i.url === primaryUrl || i.originalUrl === primaryUrl || (i.post && String(i.post.id) === String(post.id)));
-			
-			if (fallbackIndex !== -1) {
-				lightboxIndex = fallbackIndex;
-				lightboxActive = true;
-			} else if (lightboxItems.length > 0) {
-				// Absolute fallback to index 0 if it still fails
-				lightboxIndex = 0;
-				lightboxActive = true;
-			}
-		}
+	function openSlideshowFromPost(post: any) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
 	}
 
 	async function handleClear() {
@@ -166,7 +113,7 @@
 
 	onMount(async () => {
 		try {
-			mediaItems = await getAllCachedMediaMeta();
+			mediaItems = await getAllCachedMedia();
 			cacheStats = await getMediaCacheStats();
 			await refreshStorageQuota();
 			
@@ -200,8 +147,8 @@
 	});
 
 	onDestroy(() => {
-		// Revoke any object URLs we created for lightbox
-		for (const item of lightboxItems) {
+		// Revoke object URLs created for cache entries
+		for (const item of mediaItems) {
 			if (item.url) URL.revokeObjectURL(item.url);
 		}
 	});
@@ -314,6 +261,16 @@
 							onclick={() => (currentFilter = "video")}
 						>Videos</button>
 					</div>
+					<button
+						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
+						onclick={() => {
+							slideshowStartPostId = null;
+							slideshowActive = true;
+						}}
+						disabled={filteredPosts.length === 0}
+					>
+						<Play size={16} /> Play Slideshow
+					</button>
 				</div>
 			{/if}
 		</div>
@@ -340,11 +297,16 @@
 			</div>
 		</div>
 	{:else}
-		<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+		<main 
+			class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
+			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
+		>
 			{#each visibleItems as post (post.id)}
-				<LazyRender>
-					<PostCard {post} mode="cache" onclickOverride={() => openSlideshow(post)} />
-				</LazyRender>
+				<div id={"post-" + post.id}>
+					<LazyRender>
+						<PostCard {post} mode="cache" onclickOverride={() => openSlideshowFromPost(post)} />
+					</LazyRender>
+				</div>
 			{/each}
 		</main>
 		
@@ -358,4 +320,12 @@
 	{/if}
 </div>
 
-<Lightbox bind:active={lightboxActive} items={lightboxItems} currentIndex={lightboxIndex} />
+<Slideshow
+	bind:active={slideshowActive}
+	bind:activePostId={activeSlideshowPostId}
+	startPostId={slideshowStartPostId}
+	posts={filteredPosts}
+	onReachEnd={async () => {
+		loadMore();
+	}}
+/>

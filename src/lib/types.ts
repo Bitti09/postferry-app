@@ -158,6 +158,7 @@ export type PostLayout = NpfLayoutBlock;
 export interface PostTrail {
 	content?: NpfContentBlock[];
 	layout?: NpfLayoutBlock[];
+	broken_blog_name?: string;
 	blog?: {
 		name?: string;
 		uuid?: string;
@@ -165,6 +166,7 @@ export interface PostTrail {
 	};
 	post?: {
 		id?: string;
+		timestamp?: number;
 	};
 }
 
@@ -242,7 +244,7 @@ export interface TumblrPost {
 
 export type TumblrNote =
 	| { type: 'like'; timestamp: number; blog_name: string; blog_uuid: string; blog_url: string; followed: boolean; avatar_shape: string }
-	| { type: 'reblog'; timestamp: number; blog_name: string; blog_uuid: string; blog_url: string; followed: boolean; avatar_shape: string; post_id: string }
+	| { type: 'reblog'; timestamp: number; blog_name: string; blog_uuid: string; blog_url: string; followed: boolean; avatar_shape: string; post_id: string; reblog_parent_blog_name?: string; added_text?: string; tags?: string[] }
 	| { type: 'reply'; timestamp: number; blog_name: string; blog_uuid: string; blog_url: string; followed: boolean; avatar_shape: string; reply_text: string }
 	| { type: 'posted'; timestamp: number; blog_name: string; blog_uuid: string; blog_url: string; followed: boolean; avatar_shape: string };
 

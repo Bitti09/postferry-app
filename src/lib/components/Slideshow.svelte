@@ -1,16 +1,21 @@
 <script lang="ts">
-	import { PlayCircle, X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
+	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
 	import { getAllMediaUrls } from '$lib/mediaUrls';
-	import { onMount, tick } from 'svelte';
+	import { onDestroy } from 'svelte';
+	import { bulkIsMediaCached, getCachedBlobUrl } from '$lib/stores/db';
 
 	let { 
 		active = $bindable(false), 
 		posts = [], 
-		onReachEnd = async () => {} 
+		onReachEnd = async () => {},
+		activePostId = $bindable<string | number | null>(null),
+		startPostId = null
 	} = $props<{ 
 		active?: boolean, 
 		posts: any[], 
-		onReachEnd?: () => Promise<void> 
+		onReachEnd?: () => Promise<void>,
+		activePostId?: string | number | null,
+		startPostId?: string | number | null
 	}>();
 
 	type FlatMedia = {
@@ -19,25 +24,44 @@
 		post: any;
 		indexInPost: number;
 		totalInPost: number;
-		displayUrl?: string; // Cache blob if available
 	};
 
 	// Incremental flattening - append only new posts, don't re-flatten all on every load
 	let flatMedia = $state<FlatMedia[]>([]);
 	let postCount = $state(0);
+	let previousPostIds: string[] = [];
 	$effect(() => {
-		if (posts.length > postCount) {
+		const nextPostIds: string[] = posts.map((post: any) => String(post?.id ?? ''));
+		const unchangedPrefix =
+			previousPostIds.length <= nextPostIds.length &&
+			previousPostIds.every((id: string, index: number) => nextPostIds[index] === id);
+
+		if (nextPostIds.length > postCount && unchangedPrefix) {
 			const newPosts = posts.slice(postCount);
 			flatMedia.push(...newPosts.flatMap(extractMedia));
-			postCount = posts.length;
+			postCount = nextPostIds.length;
+			previousPostIds = nextPostIds;
+			return;
 		}
-		if (posts.length < postCount) {
-			// posts array was replaced (e.g. filter change)
+
+		const didChange =
+			nextPostIds.length !== previousPostIds.length ||
+			nextPostIds.some((id: string, index: number) => id !== previousPostIds[index]);
+
+		if (didChange) {
+			// posts array was replaced/reordered (e.g. filter change)
 			flatMedia = posts.flatMap(extractMedia);
-			postCount = posts.length;
+			postCount = nextPostIds.length;
+			previousPostIds = nextPostIds;
 		}
 	});
 	let blobMap = $state<Record<string, string>>({});
+	let checkedCacheStatusUrls = new Set<string>();
+	let inFlightBlobUrls = new Set<string>();
+	let createdBlobObjectUrls = new Set<string>();
+
+	const PREFETCH_RADIUS = 12;
+	const BLOB_FETCH_CONCURRENCY = 6;
 
 	// Extract and flatten media from a post
 	function extractMedia(post: any): FlatMedia[] {
@@ -61,35 +85,82 @@
 
 	let currentItem = $derived(flatMedia[currentIndex]);
 
-	// Background blob resolver - batch pre-filter then fetch only cached, capped concurrency
-	let blobResolved = $state(false);
 	$effect(() => {
-		if (active && !blobResolved) {
-			blobResolved = true;
-			resolveBlobs();
-		}
-		if (!active) {
-			blobResolved = false;
+		if (active && currentItem && currentItem.post) {
+			activePostId = currentItem.post.id;
 		}
 	});
 
-	async function resolveBlobs() {
-		const urls = flatMedia.map((m: FlatMedia) => m.url);
-		import('$lib/stores/db').then(({ bulkIsMediaCached, getCachedBlobUrl }) => {
-			bulkIsMediaCached(urls).then(cachedSet => {
-				const toFetch = urls.filter((u: string) => cachedSet.has(u));
-				const LIMIT = 8;
-				const queue: string[] = [...toFetch];
-				async function worker() {
-					while (queue.length) {
-						const url = queue.shift()!;
-						const cached = await getCachedBlobUrl(url);
-						if (cached) blobMap[url] = cached.url;
+	// Resolve cached blobs around the current slide to avoid expensive full-list scans.
+	$effect(() => {
+		if (!active || flatMedia.length === 0) {
+			return;
+		}
+		resolveBlobsAroundCurrent();
+	});
+
+	function getPrefetchWindowUrls(): string[] {
+		if (flatMedia.length === 0) return [];
+		const start = Math.max(0, currentIndex - PREFETCH_RADIUS);
+		const end = Math.min(flatMedia.length, currentIndex + PREFETCH_RADIUS + 1);
+		const urls: string[] = [];
+		for (let i = start; i < end; i++) {
+			const url = flatMedia[i]?.url;
+			if (url) urls.push(url);
+		}
+		return urls;
+	}
+
+	async function resolveBlobsAroundCurrent() {
+		const candidateUrls = getPrefetchWindowUrls().filter(
+			(url) => !checkedCacheStatusUrls.has(url) && !inFlightBlobUrls.has(url) && !blobMap[url]
+		);
+		if (candidateUrls.length === 0) return;
+
+		const cachedSet = await bulkIsMediaCached(candidateUrls);
+		for (const url of candidateUrls) {
+			checkedCacheStatusUrls.add(url);
+		}
+
+		const queue = candidateUrls.filter((url) => cachedSet.has(url));
+		if (queue.length === 0) return;
+
+		for (const url of queue) {
+			inFlightBlobUrls.add(url);
+		}
+
+		async function worker() {
+			while (queue.length > 0) {
+				const url = queue.shift();
+				if (!url) continue;
+				try {
+					const cached = await getCachedBlobUrl(url);
+					if (cached?.url) {
+						blobMap[url] = cached.url;
+						createdBlobObjectUrls.add(cached.url);
 					}
+				} finally {
+					inFlightBlobUrls.delete(url);
 				}
-				Promise.all(Array.from({ length: Math.min(LIMIT, queue.length) }, () => worker()));
-			});
-		});
+			}
+		}
+
+		void Promise.all(
+			Array.from(
+				{ length: Math.min(BLOB_FETCH_CONCURRENCY, queue.length) },
+				() => worker()
+			)
+		);
+	}
+
+	function resetBlobState() {
+		for (const objectUrl of createdBlobObjectUrls) {
+			URL.revokeObjectURL(objectUrl);
+		}
+		createdBlobObjectUrls = new Set();
+		checkedCacheStatusUrls = new Set();
+		inFlightBlobUrls = new Set();
+		blobMap = {};
 	}
 
 	// Check if we need more posts
@@ -103,7 +174,28 @@
 	$effect(() => {
 		if (!active) {
 			currentIndex = 0;
+			resetBlobState();
 		}
+	});
+
+	// Start from a specific post when requested by the parent.
+	let lastAppliedStartPostId = $state<string | number | null>(null);
+	$effect(() => {
+		if (!active) {
+			lastAppliedStartPostId = null;
+			return;
+		}
+
+		if (startPostId == null || startPostId === lastAppliedStartPostId) {
+			return;
+		}
+
+		const targetIndex = flatMedia.findIndex((item) => String(item.post?.id) === String(startPostId));
+		if (targetIndex >= 0) {
+			currentIndex = targetIndex;
+		}
+
+		lastAppliedStartPostId = startPostId;
 	});
 
 	async function next() {
@@ -122,6 +214,10 @@
 	function close() {
 		active = false;
 	}
+
+	onDestroy(() => {
+		resetBlobState();
+	});
 
 	async function checkPrefetch() {
 		if (currentIndex >= flatMedia.length - 5 && !isFetchingMore) {
@@ -163,12 +259,12 @@
 {#if active}
 	<div 
 		role="presentation"
-		class="fixed inset-0 z-[100] flex flex-col bg-black/95 backdrop-blur-md"
+		class="fixed inset-0 z-100 flex flex-col bg-black/95 backdrop-blur-md"
 		ontouchstart={handleTouchStart}
 		ontouchend={handleTouchEnd}
 	>
 		<!-- Top Bar -->
-		<div class="absolute top-0 left-0 right-0 p-4 flex items-center justify-between z-50 bg-gradient-to-b from-black/80 to-transparent">
+		<div class="absolute top-0 left-0 right-0 p-4 flex items-center justify-between z-50 bg-linear-to-b from-black/80 to-transparent">
 			<div class="flex flex-col">
 				{#if currentItem}
 					<span class="text-white font-bold text-lg drop-shadow-md">
@@ -180,7 +276,7 @@
 								{currentItem.indexInPost}/{currentItem.totalInPost}
 							</span>
 						{/if}
-						<span class="truncate max-w-[200px] sm:max-w-md">{currentItem.post.summary || ''}</span>
+						<span class="truncate max-w-50 sm:max-w-md">{currentItem.post.summary || ''}</span>
 						{#if loadCount > 0}
 							<span class="text-[10px] text-gray-500 ml-2 bg-black/40 px-1 rounded border border-white/5">
 								Prefetches: {loadCount}
@@ -234,25 +330,25 @@
 		</button>
 
 		<!-- Media Display -->
-		<div class="flex-1 flex items-center justify-center relative p-4 pb-12 mt-16 overflow-hidden min-h-0" onclick={close} role="presentation">
+		<div class="flex-1 flex items-center justify-center relative p-4 pb-12 mt-16 overflow-hidden min-h-0" onclick={(e) => {
+			if (e.target === e.currentTarget) close();
+		}} role="presentation">
 			{#if flatMedia.length === 0}
 				<Loader2 size={48} class="text-white animate-spin" />
 			{:else if currentItem}
 				{#if currentItem.isVideo}
-					<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 					<video 
 						controls 
 						class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg" 
-						onclick={(e) => e.stopPropagation()}
 						src={blobMap[currentItem.url] || currentItem.url}
-					></video>
+					>
+						<track kind="captions" />
+					</video>
 				{:else}
-					<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 					<img 
 						src={blobMap[currentItem.url] || currentItem.url} 
 						alt="Slideshow Media" 
 						class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg select-none" 
-						onclick={(e) => e.stopPropagation()} 
 						loading="eager"
 					/>
 				{/if}

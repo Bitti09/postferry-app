@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from 'lucide-svelte';
-	import { onMount } from 'svelte';
-	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls } from '$lib/mediaUrls';
+	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls, getPosterUrls } from '$lib/mediaUrls';
 	import { settings } from '$lib/stores/settings';
+	import { downloadAndCacheMedia } from '$lib/stores/mediaCache';
 	import CachedMedia from './CachedMedia.svelte';
 	import type { TumblrPost } from '$lib/types';
 
@@ -22,8 +22,29 @@
 		const allUrls = getAllMediaUrls(post);
 		const videos = getVideoUrls(post);
 		const images = getImageUrls(post);
+		const posters = getPosterUrls(post);
+		const rawPrimary = getPrimaryMediaUrl(post);
+
+		let primary = rawPrimary;
+		let primaryType: 'image' | 'video' = 'image';
+		let posterUrl = '';
+
+		if (videos.length > 0) {
+			const thumb = images[0] || posters[0];
+			if (thumb) {
+				primary = thumb;
+				primaryType = 'image';
+			} else {
+				primary = videos[0] || rawPrimary;
+				primaryType = 'video';
+				posterUrl = posters[0] || images[0] || '';
+			}
+		}
+
 		return {
-			primary: getPrimaryMediaUrl(post),
+			primary,
+			primaryType,
+			posterUrl,
 			allUrls,
 			isVideo: videos.length > 0,
 			isImage: images.length > 0,
@@ -31,8 +52,23 @@
 	});
 
 	let nsfw = $derived(post.is_nsfw);
+	let mediaFailed = $state(false);
 
-	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => preCheckedUrls.includes(u)));
+	$effect(() => {
+		// Reset per card/post render cycle.
+		post.id;
+		mediaFailed = false;
+	});
+
+	let cachedUrls = $state<Set<string>>(new Set());
+
+	$effect(() => {
+		post.id;
+		preCheckedUrls;
+		cachedUrls = new Set(preCheckedUrls);
+	});
+
+	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedUrls.has(u)));
 	let isDownloading = $state(false);
 
 	async function downloadPostMedia() {
@@ -44,18 +80,51 @@
 				return;
 			}
 
-			import('$lib/stores/db').then(({ downloadAndCacheMedia }) => {
-				Promise.all(mediaInfo.allUrls.map((url: string) => downloadAndCacheMedia(url)))
-					.then(() => {
-						isDownloading = false;
-					})
-					.catch(() => { isDownloading = false; });
-			});
+			downloadAndCacheMedia && Promise.all(mediaInfo.allUrls.map(async (url: string) => {
+				const res = await downloadAndCacheMedia(url);
+				if (res?.url) {
+					const next = new Set(cachedUrls);
+					next.add(url);
+					cachedUrls = next;
+				}
+			}))
+				.then(() => {
+					isDownloading = false;
+				})
+				.catch(() => { isDownloading = false; });
 		}
 
-		onMount(() => {
-			// no-op: cache status comes from preCheckedUrls prop
-		});
+	$effect(() => {
+		const autoCache = $settings.autoCacheMedia;
+		const urls = mediaInfo.allUrls;
+		if (!autoCache || urls.length === 0 || isCached || isDownloading) return;
+
+		let cancelled = false;
+		isDownloading = true;
+
+		(async () => {
+			try {
+				for (const url of urls) {
+					if (cancelled || cachedUrls.has(url)) continue;
+					const res = await downloadAndCacheMedia(url);
+					if (cancelled) break;
+					if (res?.url) {
+						const next = new Set(cachedUrls);
+						next.add(url);
+						cachedUrls = next;
+					}
+				}
+			} finally {
+				if (!cancelled) {
+					isDownloading = false;
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	});
 </script>
 
 <svelte:element
@@ -75,13 +144,16 @@
 			onclickOverride?.();
 		}
 	}}
-	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-[3/4] shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
+	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-3/4 shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
 >
-	{#if mediaInfo.primary}
+	{#if mediaInfo.primary && !mediaFailed}
 		<CachedMedia
 			url={mediaInfo.primary}
+			type={mediaInfo.primaryType}
+			posterUrl={mediaInfo.posterUrl}
 			alt={post.summary || 'Tumblr Post'}
 			class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+			onUnavailable={() => { mediaFailed = true; }}
 		/>
 	{:else}
 		<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
@@ -90,7 +162,7 @@
 	{/if}
 
 	<!-- Overlays -->
-	<div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 transition-opacity group-hover:opacity-100"></div>
+	<div class="absolute inset-0 bg-linear-to-t from-black/80 via-black/20 to-transparent opacity-80 transition-opacity group-hover:opacity-100"></div>
 
 
 	<!-- Top Left Icons -->

@@ -36,8 +36,7 @@
 	{@const originalImg = mediaArray.find((m: any) => m.has_original_dimensions)}
 	{@const imgUrl = originalImg ? originalImg.url : (mediaArray[0]?.url || block.url)}
 	{#if imgUrl}
-		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-		<div class="rounded-xl overflow-hidden shadow-2xl bg-gray-800 my-4 cursor-zoom-in" onclick={() => openLightbox(imgUrl)}>
+		<button type="button" class="rounded-xl overflow-hidden shadow-2xl bg-gray-800 my-4 cursor-zoom-in text-left w-full" onclick={() => openLightbox(imgUrl)}>
 			<img 
 				src={imgUrl} 
 				alt="Post content" 
@@ -47,7 +46,7 @@
 			{#if block.caption}
 				<p class="p-4 text-sm text-gray-400 italic bg-gray-900/80 border-t border-gray-800">{@html block.caption}</p>
 			{/if}
-		</div>
+		</button>
 	{/if}
 {:else if images.length > 1}
 	<div class="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-2 my-4">
@@ -56,9 +55,8 @@
 			{@const originalImg = mediaArray.find((m: any) => m.has_original_dimensions)}
 			{@const imgUrl = originalImg ? originalImg.url : (mediaArray[0]?.url || block.url)}
 			{#if imgUrl}
-				<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions a11y_img_redundant_alt -->
-				<div 
-					class="rounded-xl overflow-hidden shadow-lg bg-gray-900 cursor-zoom-in group aspect-[4/5] sm:aspect-square relative" 
+				<button type="button"
+					class="rounded-xl overflow-hidden shadow-lg bg-gray-900 cursor-zoom-in group aspect-[4/5] sm:aspect-square relative text-left" 
 					onclick={() => { currentSlide = i; openLightbox(imgUrl); }}
 				>
 					<img 
@@ -72,7 +70,7 @@
 							<p class="text-xs text-white line-clamp-2">{@html block.caption}</p>
 						</div>
 					{/if}
-				</div>
+				</button>
 			{/if}
 		{/each}
 	</div>
@@ -80,16 +78,17 @@
 
 <!-- Fullscreen Lightbox -->
 {#if lightboxUrl}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div 
-		class="fixed inset-0 z-[9999] bg-black/95 backdrop-blur-sm flex items-center justify-center"
-		onclick={closeLightbox}
-	>
+	<div class="fixed inset-0 z-[9999] bg-black/95 backdrop-blur-sm flex items-center justify-center">
+		<button
+			type="button"
+			class="absolute inset-0"
+			onclick={closeLightbox}
+			aria-label="Close lightbox"
+		></button>
 		<img 
 			src={lightboxUrl} 
 			alt="Fullscreen" 
 			class="w-screen h-screen object-contain select-none"
-			onclick={(e) => e.stopPropagation()}
 		/>
 
 		<!-- Prev / Next in lightbox -->

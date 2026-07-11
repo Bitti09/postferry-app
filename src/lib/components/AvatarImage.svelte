@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { settings } from "$lib/stores/settings";
+	import { getCachedAvatar } from "$lib/stores/db";
 
 	let { blogName, size = 64, class: className = '' } = $props<{
 		blogName: string;
@@ -7,19 +8,18 @@
 		class?: string;
 	}>();
 
-	let avatarUrl = $state(`https://api.tumblr.com/v2/blog/${blogName}/avatar/${size}`);
+	let avatarUrl = $state('');
 
 	$effect(() => {
 		if (!blogName) return;
+		avatarUrl = `https://api.tumblr.com/v2/blog/${blogName}/avatar/${size}`;
 		
 		// Fast path: if autoCacheMedia is off, use direct URL (HTTP cache handles it)
 		if (!$settings.autoCacheMedia) return;
 		
 		let isSubscribed = true;
-		import('$lib/stores/db').then(({ getCachedAvatar }) => {
-			getCachedAvatar(blogName, size).then(url => {
-				if (isSubscribed) avatarUrl = url;
-			});
+		getCachedAvatar(blogName, size).then(url => {
+			if (isSubscribed) avatarUrl = url;
 		});
 		return () => { isSubscribed = false; };
 	});

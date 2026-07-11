@@ -9,38 +9,57 @@ if (browser && navigator.storage && navigator.storage.persist) {
 
 // ─── Custom Bucket-Aware IDB Wrapper ───────────────────────────────────────
 
+const dbCache = new Map<string, Promise<IDBDatabase>>();
+
 export async function getDB(bucketName: string, dbName: string, storeName: string): Promise<IDBDatabase> {
-	return new Promise(async (resolve, reject) => {
-		try {
-			let idbFactory = window.indexedDB;
-			if ('storageBuckets' in navigator) {
-				const nav = navigator as any;
-				// App state should be persistent/strict, Media cache can be relaxed and evicted if needed
-				const options = bucketName === 'tumblr-app-state' 
-					? { persisted: true, durability: 'strict' } 
-					: { persisted: false, durability: 'relaxed' };
-				const bucket = await nav.storageBuckets.open(bucketName, options);
-				idbFactory = bucket.indexedDB;
+	const cacheKey = `${bucketName}:${dbName}:${storeName}`;
+	let dbPromise = dbCache.get(cacheKey);
+
+	if (!dbPromise) {
+		dbPromise = new Promise(async (resolve, reject) => {
+			try {
+				let idbFactory = window.indexedDB;
+				if ('storageBuckets' in navigator) {
+					const nav = navigator as any;
+					// App state should be persistent/strict, Media cache can be relaxed and evicted if needed
+					const options = bucketName === 'tumblr-app-state' 
+						? { persisted: true, durability: 'strict' } 
+						: { persisted: false, durability: 'relaxed' };
+					const bucket = await nav.storageBuckets.open(bucketName, options);
+					idbFactory = bucket.indexedDB;
+				}
+				
+				// If falling back to global IDB, we use the original names to preserve data
+				const req = idbFactory.open(dbName, 1);
+				req.onupgradeneeded = () => {
+					req.result.createObjectStore(storeName);
+				};
+				req.onsuccess = () => {
+					const db = req.result;
+					db.onclose = () => {
+						dbCache.delete(cacheKey);
+					};
+					resolve(db);
+				};
+				req.onerror = () => {
+					dbCache.delete(cacheKey);
+					reject(req.error);
+				};
+			} catch (e) {
+				dbCache.delete(cacheKey);
+				reject(e);
 			}
-			
-			// If falling back to global IDB, we use the original names to preserve data
-			const req = idbFactory.open(dbName, 1);
-			req.onupgradeneeded = () => {
-				req.result.createObjectStore(storeName);
-			};
-			req.onsuccess = () => resolve(req.result);
-			req.onerror = () => reject(req.error);
-		} catch (e) {
-			reject(e);
-		}
-	});
+		});
+		dbCache.set(cacheKey, dbPromise);
+	}
+
+	return dbPromise;
 }
 
 export function withStore(type: IDBTransactionMode, bucketName: string, dbName: string, storeName: string, callback: (store: IDBObjectStore) => IDBRequest | void): Promise<any> {
 	return getDB(bucketName, dbName, storeName).then(db => {
 		return new Promise((resolve, reject) => {
 			const transaction = db.transaction(storeName, type);
-			transaction.oncomplete = () => db.close();
 			transaction.onerror = () => reject(transaction.error);
 			transaction.onabort = () => reject(transaction.error);
 			const request = callback(transaction.objectStore(storeName));
@@ -66,6 +85,18 @@ export async function clearStore(b: string, d: string, s: string): Promise<void>
 	return withStore('readwrite', b, d, s, store => { store.clear(); });
 }
 
+export async function countStore(b: string, d: string, s: string): Promise<number> {
+	return withStore('readonly', b, d, s, store => store.count());
+}
+
+export async function keysStore(b: string, d: string, s: string): Promise<string[]> {
+	return withStore('readonly', b, d, s, store => store.getAllKeys() as any);
+}
+
+export async function deleteStore(key: IDBValidKey, b: string, d: string, s: string): Promise<void> {
+	return withStore('readwrite', b, d, s, store => { store.delete(key); });
+}
+
 export async function entriesStore(b: string, d: string, s: string): Promise<[IDBValidKey, any][]> {
 	const db = await getDB(b, d, s);
 	return new Promise((resolve, reject) => {
@@ -78,7 +109,7 @@ export async function entriesStore(b: string, d: string, s: string): Promise<[ID
 				cursor.continue();
 			}
 		};
-		tx.oncomplete = () => { db.close(); resolve(results); };
+		tx.oncomplete = () => { resolve(results); };
 		tx.onerror = () => reject(tx.error);
 	});
 }
@@ -168,13 +199,58 @@ export { clearMediaCache } from './mediaCache';
  * Returns a blob: Object URL if the media is already cached locally.
  * Returns null if not yet cached.
  */
+function getMediaId(url: string): string {
+	// Look for the directory hash (32-character hex string)
+	const hashMatch = url.match(/\/([a-f0-9]{32})\//);
+	if (hashMatch) return hashMatch[1];
+	
+	// Fallback: look for the tumblr_ prefix filename
+	const fnMatch = url.match(/(tumblr_[a-zA-Z0-9]+)/);
+	if (fnMatch) return fnMatch[1];
+	
+	return url;
+}
+
+function getResolutionScore(url: string): number {
+	const match = url.match(/_(\d+)\.(?:jpe?g|png|gif|webp|mp4|webm)/i);
+	if (match) return parseInt(match[1], 10);
+	
+	const avatarMatch = url.match(/\/avatar\/(\d+)/);
+	if (avatarMatch) return parseInt(avatarMatch[1], 10);
+	
+	return 0;
+}
+
+/**
+ * Returns a blob: Object URL if the media is already cached locally.
+ * Returns null if not yet cached.
+ */
 export async function getCachedBlobUrl(url: string): Promise<{ url: string, type: string } | null> {
 	if (!browser) return null;
 	try {
-		const item: any = await getStore(url, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
-		if (item) {
-			const blob = item.blob || item;
-			return { url: URL.createObjectURL(blob), type: blob.type };
+		const mediaId = getMediaId(url);
+		const reqScore = getResolutionScore(url);
+		const keys = await keysStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		let bestKey: string | null = null;
+		let bestScore = -1;
+
+		for (const key of keys) {
+			const keyStr = key as string;
+			if (getMediaId(keyStr) === mediaId) {
+				const score = getResolutionScore(keyStr);
+				if (score > bestScore) {
+					bestScore = score;
+					bestKey = keyStr;
+				}
+			}
+		}
+
+		if (bestKey) {
+			const item: any = await getStore(bestKey, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+			if (item) {
+				const blob = item.blob || item;
+				return { url: URL.createObjectURL(blob), type: blob.type };
+			}
 		}
 		return null;
 	} catch {
@@ -212,33 +288,47 @@ export async function getAllCachedMedia(): Promise<{ originalUrl: string, url: s
 export async function downloadAndCacheMedia(url: string, meta?: { timestamp: number, post?: any }): Promise<{ url: string, type: string, errorStatus?: number } | null> {
 	if (!browser) return null;
 	try {
-		// Already cached?
-		const existing: any = await getStore(url, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		const mediaId = getMediaId(url);
+		const reqScore = getResolutionScore(url);
 		const cleanMeta = meta ? JSON.parse(JSON.stringify(meta)) : undefined;
 
-		if (existing) {
-			const isLegacy = existing instanceof Blob || !existing.blob;
-			const existingBlob = existing.blob || existing;
-			
-			// Upgrade existing cache with metadata if missing
-			if (cleanMeta && (!existing.post || isLegacy)) {
-				const mergedMeta = isLegacy ? cleanMeta : { ...existing, ...cleanMeta };
-				await setStore(url, { blob: existingBlob, ...mergedMeta }, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		const keys = await keysStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		let bestKey: string | null = null;
+		let bestScore = -1;
+
+		for (const key of keys) {
+			const keyStr = key as string;
+			if (getMediaId(keyStr) === mediaId) {
+				const score = getResolutionScore(keyStr);
+				if (score > bestScore) {
+					bestScore = score;
+					bestKey = keyStr;
+				}
 			}
-			return { url: URL.createObjectURL(existingBlob), type: existingBlob.type };
+		}
+
+		if (bestKey && bestScore >= reqScore) {
+			const existing: any = await getStore(bestKey, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+			if (existing) {
+				const existingBlob = existing.blob || existing;
+				const isCleanMetaLegacy = existing instanceof Blob || !existing.blob;
+				if (cleanMeta && (!existing.post || isCleanMetaLegacy)) {
+					const mergedMeta = isCleanMetaLegacy ? cleanMeta : { ...existing, ...cleanMeta };
+					await setStore(bestKey, { blob: existingBlob, ...mergedMeta }, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+				}
+				return { url: URL.createObjectURL(existingBlob), type: existingBlob.type };
+			}
 		}
 
 		// Use our server-side proxy to avoid 403 Forbidden/CORS issues
 		const proxyUrl = `/api/media/proxy?url=${encodeURIComponent(url)}`;
 		const res = await fetch(proxyUrl);
+		let responseToUse = res;
 		
 		if (!res.ok) {
-			// If it's a 403 or 404, we want to report that back
 			if (res.status === 403 || res.status === 404) {
 				return { url: '', type: '', errorStatus: res.status };
 			}
-
-			// Fallback to direct fetch just in case it's a non-Tumblr URL that doesn't need proxying
 			try {
 				const fallback = await fetch(url);
 				if (!fallback.ok) {
@@ -247,19 +337,20 @@ export async function downloadAndCacheMedia(url: string, meta?: { timestamp: num
 					}
 					return null;
 				}
-				
-				const blob = await fallback.blob();
-				const dataToStore = cleanMeta ? { blob, ...cleanMeta } : blob;
-				await setStore(url, dataToStore, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
-				return { url: URL.createObjectURL(blob), type: blob.type };
+				responseToUse = fallback;
 			} catch {
 				return null;
 			}
 		}
 
-		const blob = await res.blob();
+		const blob = await responseToUse.blob();
 		const dataToStore = cleanMeta ? { blob, ...cleanMeta } : blob;
 		await setStore(url, dataToStore, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+
+		if (bestKey && bestKey !== url) {
+			await deleteStore(bestKey, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		}
+
 		return { url: URL.createObjectURL(blob), type: blob.type };
 	} catch (e) {
 		console.error('Failed to cache media:', url, e);
@@ -277,12 +368,12 @@ export async function getMediaCacheStats(): Promise<{ count: number; estimatedMb
 		if ('storageBuckets' in navigator) {
 			const nav = navigator as any;
 			const bucket = await nav.storageBuckets.open(MEDIA_BUCKET, { persisted: false, durability: 'relaxed' });
-			const [estimate, all] = await Promise.all([
+			const [estimate, count] = await Promise.all([
 				bucket.estimate(),
-				entriesStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE)
+				countStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE)
 			]);
 			return { 
-				count: all.length, 
+				count, 
 				estimatedMb: Math.round((estimate.usage || 0) / 1024 / 1024 * 10) / 10 
 			};
 		}
@@ -308,7 +399,7 @@ const AVATAR_STORE = 'avatars';
 const inFlightAvatars = new Map<string, Promise<string>>();
 const FALLBACK_AVATAR = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%234b5563"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
 
-export async function getCachedAvatar(blogName: string, size: number = 128): Promise<string> {
+export async function getCachedAvatar(blogName: string, size: number = 512): Promise<string> {
 	if (!browser) return FALLBACK_AVATAR;
 	
 	const cacheKey = `${blogName}_${size}`;
@@ -320,9 +411,26 @@ export async function getCachedAvatar(blogName: string, size: number = 128): Pro
 
 	const promise = (async () => {
 		try {
-			const cachedBlob = await getStore(cacheKey, AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
-			if (cachedBlob) {
-				return URL.createObjectURL(cachedBlob);
+			const keys = await keysStore(AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
+			let bestKey: string | null = null;
+			let bestSize = -1;
+			
+			for (const key of keys) {
+				const keyStr = key as string;
+				if (keyStr.startsWith(`${blogName}_`)) {
+					const s = parseInt(keyStr.substring(blogName.length + 1), 10);
+					if (s > bestSize) {
+						bestSize = s;
+						bestKey = keyStr;
+					}
+				}
+			}
+
+			if (bestKey && bestSize >= size) {
+				const cachedBlob = await getStore(bestKey, AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
+				if (cachedBlob) {
+					return URL.createObjectURL(cachedBlob);
+				}
 			}
 
 			// Stagger requests slightly to prevent 50 simultaneous connections tripping the DDoS limit
@@ -333,12 +441,21 @@ export async function getCachedAvatar(blogName: string, size: number = 128): Pro
 			
 			if (response.status === 429) {
 				console.warn(`[Rate Limit] Avatar fetch for ${blogName} hit 429. Using fallback.`);
+				if (bestKey) {
+					const cachedBlob = await getStore(bestKey, AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
+					if (cachedBlob) return URL.createObjectURL(cachedBlob);
+				}
 				return FALLBACK_AVATAR;
 			}
 			if (!response.ok) throw new Error(`Avatar fetch failed with status ${response.status}`);
 			
 			const blob = await response.blob();
 			await setStore(cacheKey, blob, AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
+
+			if (bestKey && bestKey !== cacheKey) {
+				await deleteStore(bestKey, AVATAR_BUCKET, AVATAR_DB, AVATAR_STORE);
+			}
+
 			return URL.createObjectURL(blob);
 		} catch (e) {
 			console.error(`Failed to cache avatar for ${blogName}`, e);
@@ -365,8 +482,20 @@ export {
 export async function isMediaCached(url: string): Promise<boolean> {
 	if (!browser) return false;
 	try {
-		const existing = await getStore(url, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
-		return !!existing;
+		const mediaId = getMediaId(url);
+		const reqScore = getResolutionScore(url);
+		const keys = await keysStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		
+		for (const key of keys) {
+			const keyStr = key as string;
+			if (getMediaId(keyStr) === mediaId) {
+				const score = getResolutionScore(keyStr);
+				if (score >= reqScore) {
+					return true;
+				}
+			}
+		}
+		return false;
 	} catch {
 		return false;
 	}
@@ -379,20 +508,30 @@ export async function isMediaCached(url: string): Promise<boolean> {
 export async function bulkIsMediaCached(urls: string[]): Promise<Set<string>> {
 	if (!browser || urls.length === 0) return new Set();
 	try {
-		const db = await getDB(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
-		return new Promise((resolve, reject) => {
-			const tx = db.transaction(MEDIA_STORE, 'readonly');
-			const store = tx.objectStore(MEDIA_STORE);
-			const found = new Set<string>();
-			let pending = urls.length;
-			for (const url of urls) {
-				const req = store.get(url);
-				req.onsuccess = () => { if (req.result) found.add(url); };
-				req.onerror = () => {};
+		const keys = await keysStore(MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+		
+		const idToScore = new Map<string, number>();
+		for (const key of keys) {
+			const keyStr = key as string;
+			const id = getMediaId(keyStr);
+			const score = getResolutionScore(keyStr);
+			const existingScore = idToScore.get(id) ?? -1;
+			if (score > existingScore) {
+				idToScore.set(id, score);
 			}
-			tx.oncomplete = () => { db.close(); resolve(found); };
-			tx.onerror = () => reject(tx.error);
-		});
+		}
+		
+		const found = new Set<string>();
+		for (const url of urls) {
+			const id = getMediaId(url);
+			const reqScore = getResolutionScore(url);
+			const cachedScore = idToScore.get(id);
+			if (cachedScore !== undefined && cachedScore >= reqScore) {
+				found.add(url);
+			}
+		}
+		
+		return found;
 	} catch {
 		return new Set();
 	}
@@ -420,5 +559,54 @@ export async function getAllCachedMediaMeta(): Promise<
 	} catch (e) {
 		console.error('Failed to get cached media meta:', e);
 		return [];
+	}
+}
+
+// ─── Blog Info Cache ───────────────────────────────────────────────────────────
+
+export interface CachedBlogInfo {
+	share_likes: boolean;
+	likes?: number;
+	updated?: number;
+	cachedAt: number;
+}
+
+export async function getCachedBlogInfo(blogName: string): Promise<CachedBlogInfo | null> {
+	if (!browser) return null;
+	try {
+		return await getStore(`blog_info_${blogName}`, APP_BUCKET, APP_DB, APP_STORE);
+	} catch (e) {
+		console.error(`Failed to get cached blog info for ${blogName}`, e);
+		return null;
+	}
+}
+
+export async function setCachedBlogInfo(blogName: string, info: CachedBlogInfo) {
+	if (!browser) return;
+	try {
+		await setStore(`blog_info_${blogName}`, info, APP_BUCKET, APP_DB, APP_STORE);
+	} catch (e) {
+		console.error(`Failed to set cached blog info for ${blogName}`, e);
+	}
+}
+
+// ─── Followed Blogs Cache ──────────────────────────────────────────────────────
+
+export async function getCachedFollowedBlogs(): Promise<any[]> {
+	if (!browser) return [];
+	try {
+		return (await getStore('tumblr_followed_blogs', APP_BUCKET, APP_DB, APP_STORE)) || [];
+	} catch (e) {
+		console.error('Failed to get cached followed blogs', e);
+		return [];
+	}
+}
+
+export async function setCachedFollowedBlogs(blogs: any[]) {
+	if (!browser) return;
+	try {
+		await setStore('tumblr_followed_blogs', blogs, APP_BUCKET, APP_DB, APP_STORE);
+	} catch (e) {
+		console.error('Failed to set cached followed blogs', e);
 	}
 }
