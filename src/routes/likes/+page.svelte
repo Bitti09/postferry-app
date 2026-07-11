@@ -4,6 +4,7 @@
 	import { accounts } from "$lib/stores/accounts";
 	import { cacheAllVisible } from "$lib/cacheUtils";
 	import { filterPosts, type PostFilter } from "$lib/postFilter";
+	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import PostCard from "$lib/components/PostCard.svelte";
 	import LazyRender from "$lib/components/LazyRender.svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
@@ -73,6 +74,32 @@
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
+
+	// Pre-compute all cached URLs in a single batch check for all visible posts
+	let cachedUrlSet = $state<Set<string>>(new Set());
+	let cachedUrlsReady = $state(false);
+
+	$effect(() => {
+		const urls = filteredLikes.flatMap(p => getAllMediaUrls(p));
+		if (urls.length === 0) {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
+			return;
+		}
+	
+		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
+			bulkIsMediaCached(urls).then(found => {
+				cachedUrlSet = found;
+				cachedUrlsReady = true;
+			}).catch(() => {
+				cachedUrlSet = new Set();
+				cachedUrlsReady = true;
+			});
+		});
+	});
+
+	// Final cached URLs for PostCard consumption
+	let cachedUrlsFinal = $derived(cachedUrlsReady ? Array.from(cachedUrlSet) : []);
 
 	async function startCacheAll() {
 		if (downloadingAll) return;
@@ -361,12 +388,12 @@
 					style={gridColumns !== 'auto' ? `grid-template-columns: repeat(${gridColumns}, minmax(0, 1fr));` : ''}
 				>
 					{#each filteredLikes as post (post.id)}
-						<div class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
-							<LazyRender>
-								<PostCard {post} />
-							</LazyRender>
-						</div>
-					{/each}
+										<div class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
+											<LazyRender>
+												<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
+											</LazyRender>
+										</div>
+									{/each}
 				</main>
 				<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
 			</div>

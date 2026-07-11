@@ -1,4 +1,4 @@
-import type { MediaBlock, PostLayout, TumblrPost } from './types';
+import type { TumblrPost, NpfContentBlock, NpfLayoutBlock } from './types';
 
 export type { PostFilter } from './types';
 
@@ -11,21 +11,21 @@ function postHasBlockType(post: TumblrPost, type: string): boolean {
 
 function postHasBlockSubtype(post: TumblrPost, subtype: string): boolean {
 	const blocks = collectContentBlocks(post);
-	return blocks.some((b) => b.subtype === subtype);
+	return blocks.some((b) => 'subtype' in b && b.subtype === subtype);
 }
 
 function postHasAskLayout(post: TumblrPost): boolean {
-	const layouts = [...(post.layout || [])];
+	const layouts = [...(post.layout || [])] as NpfLayoutBlock[];
 	if (post.trail) {
 		for (const item of post.trail) {
 			if (item.layout) layouts.push(...item.layout);
 		}
 	}
-	return layouts.some((l: PostLayout) => l.type === 'ask');
+	return layouts.some((l) => l.type === 'ask');
 }
 
-export function collectContentBlocks(post: TumblrPost): MediaBlock[] {
-	const result: MediaBlock[] = [...(post.content || [])];
+export function collectContentBlocks(post: TumblrPost): NpfContentBlock[] {
+	const result: NpfContentBlock[] = [...(post.content || [])];
 	for (const item of post.trail || []) {
 		if (item.content) result.push(...item.content);
 	}

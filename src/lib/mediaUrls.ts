@@ -1,72 +1,84 @@
-import type { MediaBlock, TumblrPost, MediaItem } from './types';
+import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, LinkBlock } from '$lib/types';
+import type { MediaExtraction } from '$lib/types';
 
-export interface MediaExtraction {
-	urls: string[];
-	primary: string;
-	videos: string[];
-	images: string[];
-	posters: string[];
-}
-
+/** Select the highest-quality media URL from a media array. */
 function pickBestMediaUrl(media?: MediaItem[]): string | null {
-	if (!media || media.length === 0) return null;
+	if (!media?.length) return null;
 
 	const original = media.find((m) => m.has_original_dimensions);
 	if (original?.url) return original.url;
 
 	let largest = media[0];
 	for (let i = 1; i < media.length; i++) {
-		const item = media[i];
-		if ((item.width || 0) > (largest.width || 0)) {
-			largest = item;
+		if ((media[i].width || 0) > (largest.width || 0)) {
+			largest = media[i];
 		}
 	}
-	return largest.url || null;
+	return largest.url ?? null;
 }
 
-function extractFromBlocks(blocks: MediaBlock[]): MediaExtraction {
+/** Type guard for image blocks */
+function isImageBlock(block: NpfContentBlock): block is ImageBlock {
+	return block.type === 'image';
+}
+
+/** Type guard for video blocks */
+function isVideoBlock(block: NpfContentBlock): block is VideoBlock {
+	return block.type === 'video';
+}
+
+/** Type guard for link blocks (have url) */
+function isLinkBlock(block: NpfContentBlock): block is LinkBlock {
+	return block.type === 'link';
+}
+
+/** Extract media from NPF content blocks. */
+function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 	const urls = new Set<string>();
 	const videos = new Set<string>();
 	const images = new Set<string>();
 	const posters = new Set<string>();
 	let primary = '';
 
-	for (const block of blocks || []) {
-		if (block.type === 'image' || block.subtype === 'image') {
-			const url = pickBestMediaUrl(block.media) || block.url;
-			if (url) {
-				urls.add(url);
-				images.add(url);
-				if (!primary) primary = url;
+	for (const block of blocks ?? []) {
+			if (isImageBlock(block)) {
+				const url = pickBestMediaUrl(block.media);
+				if (url) {
+					urls.add(url);
+					images.add(url);
+					if (!primary) primary = url;
+				}
+			} else if (isVideoBlock(block)) {
+				const vidUrl = pickBestMediaUrl(block.media) ?? block.url;
+				const posterUrl = pickBestMediaUrl(block.poster) ?? block.thumbnail_url;
+				if (vidUrl) {
+					urls.add(vidUrl);
+					videos.add(vidUrl);
+				}
+				if (posterUrl) {
+					urls.add(posterUrl);
+					posters.add(posterUrl);
+				}
+				if (!primary) primary = posterUrl ?? vidUrl ?? '';
+			} else if (isLinkBlock(block)) {
+				if (block.url) {
+					urls.add(block.url);
+					if (!primary) primary = block.url;
+				}
 			}
-		} else if (block.type === 'video' || block.subtype === 'video') {
-			const vidUrl = pickBestMediaUrl(block.media) || block.url;
-			const posterUrl = pickBestMediaUrl(block.poster) || block.thumbnail_url;
-			if (vidUrl) {
-				urls.add(vidUrl);
-				videos.add(vidUrl);
-			}
-			if (posterUrl) {
-				urls.add(posterUrl);
-				posters.add(posterUrl);
-			}
-			if (!primary) primary = posterUrl || vidUrl || '';
-		} else if (block.url) {
-			urls.add(block.url);
-			if (!primary) primary = block.url;
 		}
-	}
 
 	return {
-		urls: Array.from(urls).filter(Boolean),
-		videos: Array.from(videos).filter(Boolean),
-		images: Array.from(images).filter(Boolean),
-		posters: Array.from(posters).filter(Boolean),
+		urls: [...urls],
+		videos: [...videos],
+		images: [...images],
+		posters: [...posters],
 		primary
 	};
 }
 
-function extractLegacyUrls(post: TumblrPost): Partial<MediaExtraction> {
+/** Extract media from legacy post fields (photo/video types). */
+function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 	const urls = new Set<string>();
 	const images = new Set<string>();
 	const videos = new Set<string>();
@@ -99,97 +111,114 @@ function extractLegacyUrls(post: TumblrPost): Partial<MediaExtraction> {
 		const imgRegex = /<img[^>]+src="([^">]+)"/g;
 		let match: RegExpExecArray | null;
 		while ((match = imgRegex.exec(post.body)) !== null) {
-			if (match[1]) {
-				urls.add(match[1]);
-				images.add(match[1]);
-				if (!primary) primary = match[1];
+			const url = match[1];
+			if (url) {
+				urls.add(url);
+				images.add(url);
+				if (!primary) primary = url;
 			}
 		}
 
 		const videoRegex = /<video[^>]*><source[^>]+src="([^">]+)"/g;
 		while ((match = videoRegex.exec(post.body)) !== null) {
-			if (match[1]) {
-				urls.add(match[1]);
-				videos.add(match[1]);
+			const url = match[1];
+			if (url) {
+				urls.add(url);
+				videos.add(url);
 			}
 		}
 	}
 
 	return {
-		urls: Array.from(urls),
-		images: Array.from(images),
-		videos: Array.from(videos),
-		posters: Array.from(posters),
+		urls: [...urls],
+		images: [...images],
+		videos: [...videos],
+		posters: [...posters],
 		primary
 	};
 }
 
+/** Generate a cache key for a post based on its immutable identifiers. */
 function getMediaKey(post: TumblrPost): string {
-	return String(post.id) + ':' + (post.timestamp || '0') + ':' + (post.body?.length || 0);
+	return `${post.id}:${post.timestamp}:${post.body?.length ?? 0}`;
 }
 
-const extractionCache = new WeakMap<TumblrPost, string>();
-const extractionResults = new Map<string, MediaExtraction>();
+/** Simple LRU cache for extraction results (max 500 entries). */
+const extractionCache = new Map<string, MediaExtraction>();
+const MAX_CACHE_SIZE = 500;
+
+function setCached(key: string, value: MediaExtraction): void {
+	if (extractionCache.size >= MAX_CACHE_SIZE) {
+		const firstKey = extractionCache.keys().next().value;
+		firstKey && extractionCache.delete(firstKey);
+	}
+	extractionCache.set(key, value);
+}
 
 /**
- * Extract every media URL from a post.
- * Results are memoized against a lightweight content fingerprint so repeated
- * calls during rendering (PostCard, Slideshow, cache-all) avoid re-scanning.
+ * Extract all media URLs from a Tumblr post (NPF + legacy + reblog trail).
+ * Results are memoized to avoid re-scanning during render passes.
  */
 export function extractMedia(post: TumblrPost): MediaExtraction {
 	const key = getMediaKey(post);
 
-	const cachedKey = extractionCache.get(post);
-	if (cachedKey === key) {
-		const cached = extractionResults.get(key);
-		if (cached) return cached;
+	const cached = extractionCache.get(key);
+	if (cached) return cached;
+
+	// NPF content blocks
+	let result = extractFromBlocks(post.content ?? []);
+
+	// Reblog trail
+	for (const trail of post.trail ?? []) {
+		const trailResult = extractFromBlocks(trail.content ?? []);
+		result = {
+			urls: [...new Set([...result.urls, ...trailResult.urls])],
+			videos: [...new Set([...result.videos, ...trailResult.videos])],
+			images: [...new Set([...result.images, ...trailResult.images])],
+			posters: [...new Set([...result.posters, ...trailResult.posters])],
+			primary: result.primary ?? trailResult.primary
+		};
 	}
 
-	const npf = extractFromBlocks([...(post.content || [])]);
-	for (const item of post.trail || []) {
-		const trail = extractFromBlocks(item.content || []);
-		npf.urls = [...new Set([...npf.urls, ...trail.urls])];
-		npf.images = [...new Set([...npf.images, ...trail.images])];
-		npf.videos = [...new Set([...npf.videos, ...trail.videos])];
-		npf.posters = [...new Set([...npf.posters, ...trail.posters])];
-		if (!npf.primary) npf.primary = trail.primary;
+	// Fallback to legacy fields if NPF yielded nothing
+	if (!result.urls.length) {
+		result = extractLegacyUrls(post);
 	}
 
-	if (npf.urls.length === 0) {
-		const legacy = extractLegacyUrls(post);
-		npf.urls = legacy.urls || [];
-		npf.images = legacy.images || [];
-		npf.videos = legacy.videos || [];
-		npf.posters = legacy.posters || [];
-		if (!npf.primary) npf.primary = legacy.primary || '';
-	}
-
-	// Trim and filter
-	const result: MediaExtraction = {
-		urls: npf.urls.filter(Boolean),
-		images: npf.images.filter(Boolean),
-		videos: npf.videos.filter(Boolean),
-		posters: npf.posters.filter(Boolean),
-		primary: npf.primary
+	// Ensure clean output
+	const cleaned: MediaExtraction = {
+		urls: result.urls.filter(Boolean),
+		videos: result.videos.filter(Boolean),
+		images: result.images.filter(Boolean),
+		posters: result.posters.filter(Boolean),
+		primary: result.primary
 	};
 
-	extractionCache.set(post, key);
-	extractionResults.set(key, result);
-	return result;
+	setCached(key, cleaned);
+	return cleaned;
 }
 
+/** Get all media URLs (images + videos + posters) from a post. */
 export function getAllMediaUrls(post: TumblrPost): string[] {
 	return extractMedia(post).urls;
 }
 
+/** Get the primary/featured media URL for a post. */
 export function getPrimaryMediaUrl(post: TumblrPost): string {
 	return extractMedia(post).primary;
 }
 
+/** Get all video URLs from a post. */
 export function getVideoUrls(post: TumblrPost): string[] {
 	return extractMedia(post).videos;
 }
 
+/** Get all image URLs from a post. */
 export function getImageUrls(post: TumblrPost): string[] {
 	return extractMedia(post).images;
+}
+
+/** Clear the extraction cache (useful for testing or memory pressure). */
+export function clearMediaExtractionCache(): void {
+	extractionCache.clear();
 }

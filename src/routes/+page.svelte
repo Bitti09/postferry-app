@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/environment';
-	import { accounts } from '$lib/stores/accounts';
+	import { accounts, accountsReady } from '$lib/stores/accounts';
 	import { addPostsToCache } from '$lib/stores/db';
 	import { cacheAllVisible } from '$lib/cacheUtils';
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
+	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
@@ -41,8 +42,48 @@
 
 	let filteredPosts = $derived(filterPosts(posts, currentFilter));
 
-	let downloadingAll = $state(false);
-	let downloadProgress = $state({ done: 0, total: 0 });
+	// Pre-compute all cached URLs in a single batch check for all visible posts
+	let cachedUrls = $derived.by(() => {
+		const allPostUrls = filteredPosts.flatMap(p => getAllMediaUrls(p));
+		if (allPostUrls.length === 0) return [];
+	
+		// Use dynamic import to avoid circular deps
+		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
+			bulkIsMediaCached(allPostUrls).then(found => {
+				// Trigger re-evaluation by updating a dummy state
+				// Actually we can just use the set directly in a derived
+			});
+		});
+	
+		// We'll use a synchronous version for now - the async check will populate via effect
+		return allPostUrls; // temp - will be replaced by async check below
+	});
+
+	// Async computed cached URLs
+	let cachedUrlSet = $state<Set<string>>(new Set());
+	let cachedUrlsReady = $state(false);
+
+	$effect(() => {
+		const urls = filteredPosts.flatMap(p => getAllMediaUrls(p));
+		if (urls.length === 0) {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
+			return;
+		}
+	
+		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
+			bulkIsMediaCached(urls).then(found => {
+				cachedUrlSet = found;
+				cachedUrlsReady = true;
+			}).catch(() => {
+				cachedUrlSet = new Set();
+				cachedUrlsReady = true;
+			});
+		});
+	});
+
+	// Final cached URLs for PostCard consumption
+	let cachedUrlsFinal = $derived(cachedUrlsReady ? Array.from(cachedUrlSet) : []);
 
 	async function startCacheAll() {
 		if (downloadingAll) return;
@@ -250,7 +291,7 @@
 		</div>
 	{/if}
 
-	{#if $accounts.length === 0}
+	{#if $accountsReady && $accounts.length === 0}
 		<div class="hero min-h-[50vh] rounded-3xl bg-base-200">
 			<div class="hero-content text-center">
 				<div class="max-w-md">
@@ -265,19 +306,19 @@
 			Please activate at least one account to view the dashboard.
 		</div>
 	{:else}
-		{#if error && !isOffline}
-			<div class="alert alert-error shadow-lg mb-6">
-				<span>{error}</span>
-			</div>
-		{/if}
+				{#if error && !isOffline}
+					<div class="alert alert-error shadow-lg mb-6">
+						<span>{error}</span>
+					</div>
+				{/if}
 
-		<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
-			{#each filteredPosts as post (post.id)}
-				<LazyRender>
-					<PostCard {post} />
-				</LazyRender>
-			{/each}
-		</main>
+				<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
+									{#each filteredPosts as post (post.id)}
+										<LazyRender>
+											<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
+										</LazyRender>
+									{/each}
+								</main>
 
 		{#if filteredPosts.length === 0 && posts.length > 0}
 			<div class="py-20 text-center text-gray-500">

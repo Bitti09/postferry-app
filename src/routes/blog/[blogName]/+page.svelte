@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
+	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import { ArrowLeft, Heart } from 'lucide-svelte';
@@ -27,6 +28,32 @@
 		if (currentFilter === 'text') return post.type === 'text';
 		return true;
 	}));
+
+	// Pre-compute all cached URLs in a single batch check for all visible posts
+	let cachedUrlSet = $state<Set<string>>(new Set());
+	let cachedUrlsReady = $state(false);
+
+	$effect(() => {
+		const urls = filteredPosts.flatMap(p => getAllMediaUrls(p));
+		if (urls.length === 0) {
+			cachedUrlSet = new Set();
+			cachedUrlsReady = true;
+			return;
+		}
+	
+		import('$lib/stores/db').then(({ bulkIsMediaCached }) => {
+			bulkIsMediaCached(urls).then(found => {
+				cachedUrlSet = found;
+				cachedUrlsReady = true;
+			}).catch(() => {
+				cachedUrlSet = new Set();
+				cachedUrlsReady = true;
+			});
+		});
+	});
+
+	// Final cached URLs for PostCard consumption
+	let cachedUrlsFinal = $derived(cachedUrlsReady ? Array.from(cachedUrlSet) : []);
 
 	onMount(async () => {
 		// Accounts load async from IndexedDB; wait for them before proceeding
@@ -180,10 +207,10 @@
 		</div>
 	</div>
 	<main class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 auto-rows-max">
-		{#each filteredPosts as post (post.id)}
-			<PostCard {post} />
-		{/each}
-	</main>
+			{#each filteredPosts as post (post.id)}
+				<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
+			{/each}
+		</main>
 
 	{#if filteredPosts.length === 0 && posts.length > 0}
 		<div class="py-20 text-center text-gray-500">

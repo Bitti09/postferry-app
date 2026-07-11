@@ -26,6 +26,29 @@ function bucket() {
 }
 
 /**
+ * Check multiple URLs for cache presence in one go (batch check).
+ * Returns a Set of URLs that are cached.
+ */
+export async function bulkIsMediaCached(urls: string[]): Promise<Set<string>> {
+	if (!browser || !urls.length) return new Set();
+	
+	const cached = new Set<string>();
+	for (const url of urls) {
+		if (memoryCache.has(url)) {
+			cached.add(url);
+			continue;
+		}
+		try {
+			const item = await getStore(url, MEDIA_BUCKET, MEDIA_DB, MEDIA_STORE);
+			if (item) cached.add(url);
+		} catch {
+			// ignore
+		}
+	}
+	return cached;
+}
+
+/**
  * Returns a blob: Object URL if the media is already cached locally.
  * Returns null if not yet cached. Each result must eventually be revoked.
  */

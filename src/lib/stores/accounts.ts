@@ -1,65 +1,81 @@
 import { writable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { getCachedAccounts, setCachedAccounts } from './db';
+import { loadCachedAccounts, saveCachedAccounts } from '$lib/db/accounts';
+import type { TumblrAccount } from '$lib/types';
 
-export interface TumblrAccount {
-	blogName: string;
-	token: string;
-	secret: string;
-	avatarUrl?: string;
-	active: boolean;
-}
+const DEBOUNCE_MS = 300;
+
+/** Becomes `true` after the first IndexedDB load attempt completes (even if empty). */
+export const accountsReady = writable(false);
 
 function createAccountsStore() {
 	const { subscribe, set, update }: Writable<TumblrAccount[]> = writable([]);
 
-	// Debounced persistence to avoid IDB writes on every single toggle
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
-	function scheduleSave(accounts: TumblrAccount[]) {
+
+	function scheduleSave(accounts: TumblrAccount[]): void {
 		if (!browser) return;
 		if (saveTimer) clearTimeout(saveTimer);
-		saveTimer = setTimeout(() => setCachedAccounts(accounts), 300);
+		saveTimer = setTimeout(() => saveCachedAccounts(accounts), DEBOUNCE_MS);
 	}
 
+	// Initialize from IndexedDB
 	if (browser) {
-		// Initialize async from our Storage Bucket
-		getCachedAccounts().then(cached => {
-			if (cached && cached.length > 0) {
-				set(cached);
-			}
+		loadCachedAccounts().then((cached) => {
+			if (cached?.length) set(cached);
+			// Always signal readiness so consumers can distinguish
+			// "not loaded yet" from "loaded and truly empty"
+			accountsReady.set(true);
 		});
 	}
 
 	return {
 		subscribe,
-		addAccount: (account: TumblrAccount) =>
+		addAccount(account: TumblrAccount) {
 			update((accounts) => {
-				const existingIndex = accounts.findIndex((a) => a.blogName === account.blogName);
-				let newAccounts;
-				if (existingIndex >= 0) {
-					newAccounts = [...accounts];
-					newAccounts[existingIndex] = { ...account, active: accounts[existingIndex].active };
-				} else {
-					newAccounts = [...accounts, account];
-				}
-				scheduleSave(newAccounts);
-				return newAccounts;
-			}),
-		removeAccount: (blogName: string) =>
+				const idx = accounts.findIndex((a) => a.blogName === account.blogName);
+				const next = idx >= 0
+					? accounts.map((a, i) => i === idx ? { ...account, active: a.active } : a)
+					: [...accounts, account];
+				scheduleSave(next);
+				return next;
+			});
+		},
+		removeAccount(blogName: string) {
 			update((accounts) => {
-				const newAccounts = accounts.filter((a) => a.blogName !== blogName);
-				scheduleSave(newAccounts);
-				return newAccounts;
-			}),
-		toggleActive: (blogName: string) =>
+				const next = accounts.filter((a) => a.blogName !== blogName);
+				scheduleSave(next);
+				return next;
+			});
+		},
+		toggleActive(blogName: string) {
 			update((accounts) => {
-				const newAccounts = accounts.map((a) =>
+				const next = accounts.map((a) =>
 					a.blogName === blogName ? { ...a, active: !a.active } : a
 				);
-				scheduleSave(newAccounts);
-				return newAccounts;
-			})
+				scheduleSave(next);
+				return next;
+			});
+		},
+		/** Persist immediately (e.g., on page unload). */
+		flush() {
+			if (saveTimer) {
+				clearTimeout(saveTimer);
+				saveTimer = null;
+				// Get current value and save
+				let current: TumblrAccount[] = [];
+				subscribe((v) => (current = v))();
+				saveCachedAccounts(current);
+			}
+		}
 	};
 }
 
 export const accounts = createAccountsStore();
+
+// Flush on page hide/unload
+if (browser) {
+	const flush = () => accounts.flush();
+	addEventListener('pagehide', flush);
+	addEventListener('beforeunload', flush);
+}

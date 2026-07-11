@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from 'lucide-svelte';
 	import { onMount } from 'svelte';
-	import { downloadAndCacheMedia, bulkIsMediaCached } from '$lib/stores/db';
 	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls } from '$lib/mediaUrls';
 	import { settings } from '$lib/stores/settings';
 	import CachedMedia from './CachedMedia.svelte';
@@ -10,11 +9,13 @@
 	let {
 		post,
 		mode = 'normal',
-		onclickOverride
+		onclickOverride,
+		preCheckedUrls = []
 	} = $props<{
 		post: TumblrPost;
 		mode?: 'normal' | 'cache';
 		onclickOverride?: () => void;
+		preCheckedUrls?: string[];
 	}>();
 
 	let mediaInfo = $derived.by(() => {
@@ -31,52 +32,30 @@
 
 	let nsfw = $derived(post.is_nsfw);
 
-	let isCached = $state(false);
+	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => preCheckedUrls.includes(u)));
 	let isDownloading = $state(false);
 
-	let checkPromise: Promise<void> | null = null;
+	async function downloadPostMedia() {
+			if (isDownloading || isCached) return;
+			isDownloading = true;
 
-	async function checkCacheStatus() {
-		if (checkPromise) return checkPromise;
-
-		checkPromise = (async () => {
 			if (mediaInfo.allUrls.length === 0) {
-				isCached = true;
+				isDownloading = false;
 				return;
 			}
-			const cachedSet = await bulkIsMediaCached(mediaInfo.allUrls);
-			isCached = mediaInfo.allUrls.every((url: string) => cachedSet.has(url));
-		})();
-		return checkPromise.finally(() => { checkPromise = null; });
-	}
 
-	async function downloadPostMedia() {
-		if (isDownloading || isCached) return;
-		isDownloading = true;
-
-		if (mediaInfo.allUrls.length === 0) {
-			isCached = true;
-			isDownloading = false;
-			return;
+			import('$lib/stores/db').then(({ downloadAndCacheMedia }) => {
+				Promise.all(mediaInfo.allUrls.map((url: string) => downloadAndCacheMedia(url)))
+					.then(() => {
+						isDownloading = false;
+					})
+					.catch(() => { isDownloading = false; });
+			});
 		}
 
-		const cachedSet = await bulkIsMediaCached(mediaInfo.allUrls);
-		const toDownload = mediaInfo.allUrls.filter((url: string) => !cachedSet.has(url));
-		await Promise.all(toDownload.map((url: string) => downloadAndCacheMedia(url)));
-
-		isDownloading = false;
-		isCached = true;
-	}
-
-	onMount(() => {
-		checkCacheStatus();
-	});
-
-	$effect(() => {
-		if ($settings.autoCacheMedia && !isCached && !isDownloading) {
-			downloadPostMedia();
-		}
-	});
+		onMount(() => {
+			// no-op: cache status comes from preCheckedUrls prop
+		});
 </script>
 
 <svelte:element

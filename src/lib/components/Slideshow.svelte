@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { PlayCircle, X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
-	import { getAllMediaUrls } from '$lib/stores/db';
-	import { getCachedBlobUrl, bulkIsMediaCached } from '$lib/stores/db';
+	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import { onMount, tick } from 'svelte';
 
 	let { 
@@ -54,7 +53,7 @@
 			};
 		});
 	}
-	
+
 	let currentIndex = $state(0);
 	let isFetchingMore = $state(false);
 	let loadCount = $state(0);
@@ -76,18 +75,21 @@
 
 	async function resolveBlobs() {
 		const urls = flatMedia.map((m: FlatMedia) => m.url);
-		const cachedSet = await bulkIsMediaCached(urls);
-		const toFetch = urls.filter((u: string) => cachedSet.has(u));
-		const LIMIT = 8;
-		const queue: string[] = [...toFetch];
-		async function worker() {
-			while (queue.length) {
-				const url = queue.shift()!;
-				const cached = await getCachedBlobUrl(url);
-				if (cached) blobMap[url] = cached.url;
-			}
-		}
-		await Promise.all(Array.from({ length: Math.min(LIMIT, queue.length) }, () => worker()));
+		import('$lib/stores/db').then(({ bulkIsMediaCached, getCachedBlobUrl }) => {
+			bulkIsMediaCached(urls).then(cachedSet => {
+				const toFetch = urls.filter((u: string) => cachedSet.has(u));
+				const LIMIT = 8;
+				const queue: string[] = [...toFetch];
+				async function worker() {
+					while (queue.length) {
+						const url = queue.shift()!;
+						const cached = await getCachedBlobUrl(url);
+						if (cached) blobMap[url] = cached.url;
+					}
+				}
+				Promise.all(Array.from({ length: Math.min(LIMIT, queue.length) }, () => worker()));
+			});
+		});
 	}
 
 	// Check if we need more posts
