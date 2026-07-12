@@ -1,12 +1,12 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { onMount, untrack } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
-	import { getAllMediaUrls } from '$lib/mediaUrls';
-	import { bulkIsMediaCached } from '$lib/stores/db';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import { ArrowLeft, Heart } from 'lucide-svelte';
+	import Slideshow from '$lib/components/Slideshow.svelte';
+	import { ArrowLeft, Heart, Play } from 'lucide-svelte';
 	import { settings } from '$lib/stores/settings';
 
 	let blogName = $page.params.blogName;
@@ -19,6 +19,28 @@
 	let beforeId: number | null = $state(null);
 	let error = $state('');
 	let fetchController: AbortController | null = null;
+	let gridContainer = $state<HTMLElement | null>(null);
+	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
+
+	const GRID_GAP_PX = 16;
+	const VIRTUAL_OVERSCAN_ROWS = 8;
+
+	let viewportWidth = $state(0);
+	let viewportHeight = $state(0);
+	let scrollY = $state(0);
+	let gridTop = $state(0);
+	let gridWidth = $state(0);
+
+	function getAutoColumnCount(width: number): number {
+		if (width >= 1536) return 7;
+		if (width >= 1280) return 6;
+		if (width >= 1024) return 5;
+		if (width >= 768) return 4;
+		if (width >= 640) return 3;
+		return 2;
+	}
 	
 	let currentFilter = $state('all');
 
@@ -42,29 +64,92 @@
 		return true;
 	}));
 
-	// Pre-compute all cached URLs in a single batch check for all visible posts
-	let cachedUrlSet = $state<Set<string>>(new Set());
-	let cachedUrlsReady = $state(false);
-
-	$effect(() => {
-		const urls = filteredPosts.flatMap(p => getAllMediaUrls(p));
-		if (urls.length === 0) {
-			cachedUrlSet = new Set();
-			cachedUrlsReady = true;
-			return;
+	let columnCount = $derived.by(() => {
+		const configured = $settings.mediaColumns;
+		if (configured !== 'auto') {
+			const parsed = Number.parseInt(configured, 10);
+			if (Number.isFinite(parsed) && parsed > 0) return parsed;
 		}
-	
-		bulkIsMediaCached(urls).then(found => {
-			cachedUrlSet = found;
-			cachedUrlsReady = true;
-		}).catch(() => {
-			cachedUrlSet = new Set();
-			cachedUrlsReady = true;
-		});
+		const width = viewportWidth || (browser ? window.innerWidth : 1024);
+		return getAutoColumnCount(width);
 	});
 
-	// Final cached URLs for PostCard consumption
-	let cachedUrlsFinal = $derived(cachedUrlsReady ? Array.from(cachedUrlSet) : []);
+	let rowCount = $derived(Math.ceil(filteredPosts.length / columnCount));
+	let cardWidth = $derived.by(() => {
+		if (columnCount <= 0 || gridWidth <= 0) return 0;
+		return Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
+	});
+	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
+	let rowStride = $derived(rowHeight + GRID_GAP_PX);
+	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
+
+	let viewportTopWithinGrid = $derived(Math.max(0, scrollY - gridTop));
+	let viewportBottomWithinGrid = $derived(viewportTopWithinGrid + viewportHeight);
+
+	let visibleStartRow = $derived.by(() => {
+		if (rowStride <= 0) return 0;
+		return Math.max(0, Math.floor(viewportTopWithinGrid / rowStride) - VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleEndRow = $derived.by(() => {
+		if (rowStride <= 0) return -1;
+		return Math.min(rowCount - 1, Math.ceil(viewportBottomWithinGrid / rowStride) + VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleRows = $derived.by(() => {
+		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
+			return [] as { row: number; posts: any[] }[];
+		}
+
+		const rows: { row: number; posts: any[] }[] = [];
+		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
+			const startIndex = row * columnCount;
+			const postsInRow = filteredPosts.slice(startIndex, startIndex + columnCount);
+			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
+		}
+		return rows;
+	});
+
+	function updateViewportMetrics() {
+		if (!browser) return;
+		viewportWidth = window.innerWidth;
+		viewportHeight = window.innerHeight;
+		scrollY = window.scrollY;
+	}
+
+	function updateGridMetrics() {
+		if (!browser || !gridContainer) return;
+		const rect = gridContainer.getBoundingClientRect();
+		gridTop = window.scrollY + rect.top;
+		gridWidth = rect.width;
+	}
+
+	function refreshVirtualMetrics() {
+		updateViewportMetrics();
+		updateGridMetrics();
+	}
+
+	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
+	}
+
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			} else if (browser && rowStride > 0) {
+				const postIndex = filteredPosts.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
+				if (postIndex >= 0) {
+					const row = Math.floor(postIndex / columnCount);
+					const targetTop = Math.max(0, gridTop + row * rowStride - 120);
+					window.scrollTo({ top: targetTop, behavior: 'instant' });
+				}
+			}
+			activeSlideshowPostId = null;
+		}
+	});
 
 	onMount(async () => {
 		// Accounts load async from IndexedDB; wait for them before proceeding
@@ -117,6 +202,43 @@
 
 		// Initial load of posts
 		loadPosts();
+
+		if (browser) {
+			const onResize = () => refreshVirtualMetrics();
+			const onScroll = () => {
+				scrollY = window.scrollY;
+			};
+
+			window.addEventListener('resize', onResize);
+			window.addEventListener('scroll', onScroll, { passive: true });
+
+			const resizeObserver = new ResizeObserver(() => {
+				updateGridMetrics();
+			});
+			if (gridContainer) {
+				resizeObserver.observe(gridContainer);
+			}
+
+			requestAnimationFrame(() => {
+				refreshVirtualMetrics();
+			});
+
+			return () => {
+				window.removeEventListener('resize', onResize);
+				window.removeEventListener('scroll', onScroll);
+				resizeObserver.disconnect();
+			};
+		}
+	});
+
+	$effect(() => {
+		gridContainer;
+		filteredPosts.length;
+		columnCount;
+		if (!browser) return;
+		requestAnimationFrame(() => {
+			updateGridMetrics();
+		});
 	});
 
 	async function loadPosts() {
@@ -215,21 +337,45 @@
 	<!-- Posts Grid -->
 	<div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between mb-6">
 		<h2 class="text-2xl font-bold text-white">Recent Posts</h2>
-		<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
-			<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
-			<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
-			<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
-			<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+		<div class="flex items-center gap-2 flex-wrap">
+			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
+				<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
+				<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
+				<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
+				<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+			</div>
+			<button
+				class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
+				onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+				disabled={filteredPosts.length === 0}
+			>
+				<Play size={16} /> Play Slideshow
+			</button>
 		</div>
 	</div>
-	<main 
-		class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
-		style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
-	>
-			{#each filteredPosts as post (post.id)}
-				<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
-			{/each}
-		</main>
+	<main>
+		<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
+			{#if cardWidth > 0}
+				{#each visibleRows as rowItem (rowItem.row)}
+					<div
+						class="absolute"
+						style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
+					>
+						<div
+							class="grid"
+							style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
+						>
+							{#each rowItem.posts as post (post.id)}
+								<div id={"post-" + post.id}>
+									<PostCard {post} onMediaClick={openSlideshowFromPost} />
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/each}
+			{/if}
+		</div>
+	</main>
 
 	{#if filteredPosts.length === 0 && posts.length > 0}
 		<div class="py-20 text-center text-gray-500">
@@ -239,3 +385,11 @@
 
 	<InfiniteScroll {hasMore} loading={loadingPosts} onload={loadPosts} />
 </div>
+
+<Slideshow
+	bind:active={slideshowActive}
+	bind:activePostId={activeSlideshowPostId}
+	startPostId={slideshowStartPostId}
+	posts={filteredPosts}
+	onReachEnd={async () => { await loadPosts(); }}
+/>

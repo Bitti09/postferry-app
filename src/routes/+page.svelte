@@ -36,12 +36,104 @@
 	let downloadProgress = $state({ done: 0, total: 0 });
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
+	let gridContainer = $state<HTMLElement | null>(null);
+
+	const GRID_GAP_PX = 16;
+	const VIRTUAL_OVERSCAN_ROWS = 8;
+
+	let viewportWidth = $state(0);
+	let viewportHeight = $state(0);
+	let scrollY = $state(0);
+	let gridTop = $state(0);
+	let gridWidth = $state(0);
+
+	function getAutoColumnCount(width: number): number {
+		if (width >= 1536) return 7;
+		if (width >= 1280) return 6;
+		if (width >= 1024) return 5;
+		if (width >= 768) return 4;
+		if (width >= 640) return 3;
+		return 2;
+	}
+
+	let columnCount = $derived.by(() => {
+		const configured = $settings.mediaColumns;
+		if (configured !== 'auto') {
+			const parsed = Number.parseInt(configured, 10);
+			if (Number.isFinite(parsed) && parsed > 0) return parsed;
+		}
+		const width = viewportWidth || (browser ? window.innerWidth : 1024);
+		return getAutoColumnCount(width);
+	});
+
+	let rowCount = $derived(Math.ceil(filteredPosts.length / columnCount));
+	let cardWidth = $derived.by(() => {
+		if (columnCount <= 0 || gridWidth <= 0) return 0;
+		return Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
+	});
+	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
+	let rowStride = $derived(rowHeight + GRID_GAP_PX);
+	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
+
+	let viewportTopWithinGrid = $derived(Math.max(0, scrollY - gridTop));
+	let viewportBottomWithinGrid = $derived(viewportTopWithinGrid + viewportHeight);
+
+	let visibleStartRow = $derived.by(() => {
+		if (rowStride <= 0) return 0;
+		return Math.max(0, Math.floor(viewportTopWithinGrid / rowStride) - VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleEndRow = $derived.by(() => {
+		if (rowStride <= 0) return -1;
+		return Math.min(rowCount - 1, Math.ceil(viewportBottomWithinGrid / rowStride) + VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleRows = $derived.by(() => {
+		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
+			return [] as { row: number; posts: TumblrPost[] }[];
+		}
+
+		const rows: { row: number; posts: TumblrPost[] }[] = [];
+		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
+			const startIndex = row * columnCount;
+			const postsInRow = filteredPosts.slice(startIndex, startIndex + columnCount);
+			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
+		}
+		return rows;
+	});
+
+	function updateViewportMetrics() {
+		if (!browser) return;
+		viewportWidth = window.innerWidth;
+		viewportHeight = window.innerHeight;
+		scrollY = window.scrollY;
+	}
+
+	function updateGridMetrics() {
+		if (!browser || !gridContainer) return;
+		const rect = gridContainer.getBoundingClientRect();
+		gridTop = window.scrollY + rect.top;
+		gridWidth = rect.width;
+	}
+
+	function refreshVirtualMetrics() {
+		updateViewportMetrics();
+		updateGridMetrics();
+	}
 
 	$effect(() => {
 		if (!slideshowActive && activeSlideshowPostId) {
 			const el = document.getElementById(`post-${activeSlideshowPostId}`);
 			if (el) {
 				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			} else if (browser && rowStride > 0) {
+				const postIndex = filteredPosts.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
+				if (postIndex >= 0) {
+					const row = Math.floor(postIndex / columnCount);
+					const targetTop = Math.max(0, gridTop + row * rowStride - 120);
+					window.scrollTo({ top: targetTop, behavior: 'instant' });
+				}
 			}
 			activeSlideshowPostId = null;
 		}
@@ -85,6 +177,11 @@
 		downloadingAll = true;
 		await cacheAllVisible(filteredPosts, (p) => { downloadProgress = p; });
 		downloadingAll = false;
+	}
+
+	function openSlideshowFromPost(post: TumblrPost, _mediaUrl?: string) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
 	}
 
 	async function loadPosts(reset = false) {
@@ -211,10 +308,46 @@
 	onMount(() => {
 		if (browser) {
 			isOffline = !navigator.onLine;
-			window.addEventListener('online', () => { isOffline = false; loadPosts(false); });
-			window.addEventListener('offline', () => isOffline = true);
+			const onOnline = () => { isOffline = false; loadPosts(false); };
+			const onOffline = () => { isOffline = true; };
+			const onResize = () => refreshVirtualMetrics();
+			const onScroll = () => { scrollY = window.scrollY; };
+
+			window.addEventListener('online', onOnline);
+			window.addEventListener('offline', onOffline);
+			window.addEventListener('resize', onResize);
+			window.addEventListener('scroll', onScroll, { passive: true });
+
+			const resizeObserver = new ResizeObserver(() => {
+				updateGridMetrics();
+			});
+			if (gridContainer) {
+				resizeObserver.observe(gridContainer);
+			}
+
+			requestAnimationFrame(() => {
+				refreshVirtualMetrics();
+			});
+
+			return () => {
+				window.removeEventListener('online', onOnline);
+				window.removeEventListener('offline', onOffline);
+				window.removeEventListener('resize', onResize);
+				window.removeEventListener('scroll', onScroll);
+				resizeObserver.disconnect();
+			};
 		}
 		// $effect above handles initial load on activeAccounts/currentFilter change
+	});
+
+	$effect(() => {
+		gridContainer;
+		filteredPosts.length;
+		columnCount;
+		if (!browser) return;
+		requestAnimationFrame(() => {
+			updateGridMetrics();
+		});
 	});
 </script>
 
@@ -273,7 +406,7 @@
 					<div class="flex items-center gap-2">
 						<button 
 							class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-							onclick={() => slideshowActive = true}
+							onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
 							disabled={filteredPosts.length === 0}
 						>
 							<Play size={16} /> Play Slideshow
@@ -326,18 +459,31 @@
 					</div>
 				{/if}
 
-				<main 
-					class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
-					style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
-				>
-									{#each filteredPosts as post (post.id)}
-										<div id={"post-" + post.id}>
-											<LazyRender>
-												<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
-											</LazyRender>
-										</div>
-									{/each}
-								</main>
+				<main>
+					<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
+						{#if cardWidth > 0}
+							{#each visibleRows as rowItem (rowItem.row)}
+								<div
+									class="absolute"
+									style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
+								>
+									<div
+										class="grid"
+										style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
+									>
+										{#each rowItem.posts as post (post.id)}
+											<div id={"post-" + post.id}>
+												<LazyRender>
+													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} />
+												</LazyRender>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
+				</main>
 
 		{#if filteredPosts.length === 0 && posts.length > 0}
 			<div class="py-20 text-center text-gray-500">
@@ -352,6 +498,7 @@
 <Slideshow 
 	bind:active={slideshowActive} 
 	bind:activePostId={activeSlideshowPostId}
+	startPostId={slideshowStartPostId}
 	posts={filteredPosts} 
 	onReachEnd={async () => { await loadPosts(false); }} 
 />

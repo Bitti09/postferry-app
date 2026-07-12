@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
@@ -19,12 +20,39 @@
 	let error = $state('');
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
+	let gridContainer = $state<HTMLElement | null>(null);
+
+	const GRID_GAP_PX = 16;
+	const VIRTUAL_OVERSCAN_ROWS = 8;
+
+	let viewportWidth = $state(0);
+	let viewportHeight = $state(0);
+	let scrollY = $state(0);
+	let gridTop = $state(0);
+	let gridWidth = $state(0);
+
+	function getAutoColumnCount(width: number): number {
+		if (width >= 1536) return 7;
+		if (width >= 1280) return 6;
+		if (width >= 1024) return 5;
+		if (width >= 768) return 4;
+		if (width >= 640) return 3;
+		return 2;
+	}
 
 	$effect(() => {
 		if (!slideshowActive && activeSlideshowPostId) {
 			const el = document.getElementById(`post-${activeSlideshowPostId}`);
 			if (el) {
 				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			} else if (browser && rowStride > 0) {
+				const postIndex = filteredPosts.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
+				if (postIndex >= 0) {
+					const row = Math.floor(postIndex / columnCount);
+					const targetTop = Math.max(0, gridTop + row * rowStride - 120);
+					window.scrollTo({ top: targetTop, behavior: 'instant' });
+				}
 			}
 			activeSlideshowPostId = null;
 		}
@@ -52,6 +80,70 @@
 
 	// Derived filtering using shared postFilter utility
 	let filteredPosts = $derived(filterPosts(posts, currentFilter as PostFilter));
+	let columnCount = $derived.by(() => {
+		const configured = $settings.mediaColumns;
+		if (configured !== 'auto') {
+			const parsed = Number.parseInt(configured, 10);
+			if (Number.isFinite(parsed) && parsed > 0) return parsed;
+		}
+		const width = viewportWidth || (browser ? window.innerWidth : 1024);
+		return getAutoColumnCount(width);
+	});
+
+	let rowCount = $derived(Math.ceil(filteredPosts.length / columnCount));
+	let cardWidth = $derived.by(() => {
+		if (columnCount <= 0 || gridWidth <= 0) return 0;
+		return Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
+	});
+	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
+	let rowStride = $derived(rowHeight + GRID_GAP_PX);
+	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
+
+	let viewportTopWithinGrid = $derived(Math.max(0, scrollY - gridTop));
+	let viewportBottomWithinGrid = $derived(viewportTopWithinGrid + viewportHeight);
+
+	let visibleStartRow = $derived.by(() => {
+		if (rowStride <= 0) return 0;
+		return Math.max(0, Math.floor(viewportTopWithinGrid / rowStride) - VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleEndRow = $derived.by(() => {
+		if (rowStride <= 0) return -1;
+		return Math.min(rowCount - 1, Math.ceil(viewportBottomWithinGrid / rowStride) + VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleRows = $derived.by(() => {
+		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
+			return [] as { row: number; posts: any[] }[];
+		}
+
+		const rows: { row: number; posts: any[] }[] = [];
+		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
+			const startIndex = row * columnCount;
+			const postsInRow = filteredPosts.slice(startIndex, startIndex + columnCount);
+			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
+		}
+		return rows;
+	});
+
+	function updateViewportMetrics() {
+		if (!browser) return;
+		viewportWidth = window.innerWidth;
+		viewportHeight = window.innerHeight;
+		scrollY = window.scrollY;
+	}
+
+	function updateGridMetrics() {
+		if (!browser || !gridContainer) return;
+		const rect = gridContainer.getBoundingClientRect();
+		gridTop = window.scrollY + rect.top;
+		gridWidth = rect.width;
+	}
+
+	function refreshVirtualMetrics() {
+		updateViewportMetrics();
+		updateGridMetrics();
+	}
 
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
@@ -61,6 +153,11 @@
 		downloadingAll = true;
 		await cacheAllVisible(filteredPosts, (p) => { downloadProgress = p; });
 		downloadingAll = false;
+	}
+
+	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
 	}
 
 	async function performSearch(reset = false) {
@@ -133,6 +230,45 @@
 			performSearch(true);
 		}
 	}
+
+	onMount(() => {
+		if (!browser) return;
+
+		const onResize = () => refreshVirtualMetrics();
+		const onScroll = () => {
+			scrollY = window.scrollY;
+		};
+
+		window.addEventListener('resize', onResize);
+		window.addEventListener('scroll', onScroll, { passive: true });
+
+		const resizeObserver = new ResizeObserver(() => {
+			updateGridMetrics();
+		});
+		if (gridContainer) {
+			resizeObserver.observe(gridContainer);
+		}
+
+		requestAnimationFrame(() => {
+			refreshVirtualMetrics();
+		});
+
+		return () => {
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('scroll', onScroll);
+			resizeObserver.disconnect();
+		};
+	});
+
+	$effect(() => {
+		gridContainer;
+		filteredPosts.length;
+		columnCount;
+		if (!browser) return;
+		requestAnimationFrame(() => {
+			updateGridMetrics();
+		});
+	});
 </script>
 
 <div class="min-h-screen p-4 md:p-8 bg-black text-white pb-20">
@@ -202,7 +338,7 @@
 				<div class="flex items-center gap-2">
 					<button 
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-						onclick={() => slideshowActive = true}
+						onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
 						disabled={filteredPosts.length === 0}
 					>
 						<Play size={16} /> Play Slideshow
@@ -245,18 +381,31 @@
 
 	<!-- Results Grid -->
 	{#if posts.length > 0}
-		<div 
-			class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
-			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
-		>
-			{#each filteredPosts as post (post.id)}
-				<div id={"post-" + post.id}>
-					<LazyRender>
-						<PostCard {post} />
-					</LazyRender>
-				</div>
-			{/each}
-		</div>
+		<main>
+			<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
+				{#if cardWidth > 0}
+					{#each visibleRows as rowItem (rowItem.row)}
+						<div
+							class="absolute"
+							style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
+						>
+							<div
+								class="grid"
+								style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
+							>
+								{#each rowItem.posts as post (post.id)}
+									<div id={"post-" + post.id}>
+										<LazyRender>
+											<PostCard {post} onMediaClick={openSlideshowFromPost} />
+										</LazyRender>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/each}
+				{/if}
+			</div>
+		</main>
 
 		<InfiniteScroll 
 			hasMore={hasMore && !loading} 
@@ -286,6 +435,7 @@
 	<Slideshow 
 		bind:active={slideshowActive} 
 		bind:activePostId={activeSlideshowPostId}
+		startPostId={slideshowStartPostId}
 		posts={filteredPosts} 
 		onReachEnd={() => performSearch(false)} 
 	/>

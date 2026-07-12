@@ -30,12 +30,88 @@
 	let isOffline = $state(false);
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
+	let likesScrollContainer = $state<HTMLElement | null>(null);
+	let gridContainer = $state<HTMLElement | null>(null);
+
+	const GRID_GAP_PX = 16;
+	const VIRTUAL_OVERSCAN_ROWS = 8;
+
+	let containerWidth = $state(0);
+	let viewportHeight = $state(0);
+	let scrollTop = $state(0);
+
+	function getAutoColumnCount(width: number): number {
+		if (width >= 1536) return 7;
+		if (width >= 1280) return 6;
+		if (width >= 1024) return 5;
+		if (width >= 768) return 4;
+		if (width >= 640) return 3;
+		return 2;
+	}
+
+	let columnCount = $derived.by(() => {
+		const configured = $settings.mediaColumns;
+		if (configured !== 'auto') {
+			const parsed = Number.parseInt(configured, 10);
+			if (Number.isFinite(parsed) && parsed > 0) return parsed;
+		}
+		const width = containerWidth || (browser ? window.innerWidth : 1024);
+		return getAutoColumnCount(width);
+	});
+
+	let rowCount = $derived(Math.ceil(filteredLikes.length / columnCount));
+	let cardWidth = $derived.by(() => {
+		if (columnCount <= 0 || containerWidth <= 0) return 0;
+		return Math.max(0, (containerWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
+	});
+	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
+	let rowStride = $derived(rowHeight + GRID_GAP_PX);
+	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
+
+	let visibleStartRow = $derived.by(() => {
+		if (rowStride <= 0) return 0;
+		return Math.max(0, Math.floor(scrollTop / rowStride) - VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleEndRow = $derived.by(() => {
+		if (rowStride <= 0) return -1;
+		const viewportBottom = scrollTop + viewportHeight;
+		return Math.min(rowCount - 1, Math.ceil(viewportBottom / rowStride) + VIRTUAL_OVERSCAN_ROWS);
+	});
+
+	let visibleRows = $derived.by(() => {
+		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
+			return [] as { row: number; posts: TumblrPost[] }[];
+		}
+
+		const rows: { row: number; posts: TumblrPost[] }[] = [];
+		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
+			const startIndex = row * columnCount;
+			const postsInRow = filteredLikes.slice(startIndex, startIndex + columnCount);
+			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
+		}
+		return rows;
+	});
+
+	function updateContainerMetrics() {
+		if (!likesScrollContainer) return;
+		containerWidth = likesScrollContainer.clientWidth;
+		viewportHeight = likesScrollContainer.clientHeight;
+		scrollTop = likesScrollContainer.scrollTop;
+	}
 
 	$effect(() => {
 		if (!slideshowActive && activeSlideshowPostId) {
 			const el = document.getElementById(`post-${activeSlideshowPostId}`);
 			if (el) {
 				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			} else if (likesScrollContainer && rowStride > 0) {
+				const postIndex = filteredLikes.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
+				if (postIndex >= 0) {
+					const row = Math.floor(postIndex / columnCount);
+					likesScrollContainer.scrollTo({ top: Math.max(0, row * rowStride - 120), behavior: 'instant' });
+				}
 			}
 			activeSlideshowPostId = null;
 		}
@@ -114,6 +190,11 @@
 		downloadingAll = true;
 		await cacheAllVisible(filteredLikes, (p) => { downloadProgress = p; });
 		downloadingAll = false;
+	}
+
+	function openSlideshowFromPost(post: TumblrPost, _mediaUrl?: string) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
 	}
 
 	async function loadLikes(reset = false) {
@@ -256,12 +337,56 @@
 	onMount(() => {
 		if (browser) {
 			isOffline = !navigator.onLine;
-			window.addEventListener("online", () => {
+			const onOnline = () => {
 				isOffline = false;
 				loadLikes();
+			};
+			const onOffline = () => (isOffline = true);
+			const onWindowResize = () => updateContainerMetrics();
+			const onContainerScroll = () => {
+				if (!likesScrollContainer) return;
+				scrollTop = likesScrollContainer.scrollTop;
+			};
+
+			window.addEventListener("online", onOnline);
+			window.addEventListener("offline", onOffline);
+			window.addEventListener("resize", onWindowResize);
+
+			if (likesScrollContainer) {
+				likesScrollContainer.addEventListener('scroll', onContainerScroll, { passive: true });
+			}
+
+			const resizeObserver = new ResizeObserver(() => {
+				updateContainerMetrics();
 			});
-			window.addEventListener("offline", () => (isOffline = true));
+			if (likesScrollContainer) {
+				resizeObserver.observe(likesScrollContainer);
+			}
+
+			requestAnimationFrame(() => {
+				updateContainerMetrics();
+			});
+
+			return () => {
+				window.removeEventListener("online", onOnline);
+				window.removeEventListener("offline", onOffline);
+				window.removeEventListener("resize", onWindowResize);
+				if (likesScrollContainer) {
+					likesScrollContainer.removeEventListener('scroll', onContainerScroll);
+				}
+				resizeObserver.disconnect();
+			};
 		}
+	});
+
+	$effect(() => {
+		likesScrollContainer;
+		filteredLikes.length;
+		columnCount;
+		if (!browser) return;
+		requestAnimationFrame(() => {
+			updateContainerMetrics();
+		});
 	});
 </script>
 
@@ -355,7 +480,7 @@
 					</select>
 					<button
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-						onclick={() => (slideshowActive = true)}
+						onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
 						disabled={filteredLikes.length === 0}
 					>
 						<Play size={16} /> Play Slideshow
@@ -404,18 +529,31 @@
 				No favourited posts match the current filter.
 			</div>
 		{:else}
-			<div class="flex-1 overflow-y-auto pr-2 pb-20">
-				<main 
-					class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
-					style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
-				>
-					{#each filteredLikes as post (post.id)}
-										<div id={"post-" + post.id} class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
-											<LazyRender>
-												<PostCard {post} preCheckedUrls={cachedUrlsFinal} />
-											</LazyRender>
-										</div>
-									{/each}
+			<div bind:this={likesScrollContainer} class="flex-1 overflow-y-auto pr-2 pb-20">
+				<main>
+					<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
+						{#if cardWidth > 0}
+							{#each visibleRows as rowItem (rowItem.row)}
+								<div
+									class="absolute"
+									style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
+								>
+									<div
+										class="grid"
+										style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
+									>
+										{#each rowItem.posts as post (post.id)}
+											<div id={"post-" + post.id} class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
+												<LazyRender>
+													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} />
+												</LazyRender>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/each}
+						{/if}
+					</div>
 				</main>
 				<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
 			</div>
@@ -426,6 +564,7 @@
 <Slideshow
 	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
+	startPostId={slideshowStartPostId}
 	posts={filteredLikes}
 	onReachEnd={async () => {
 		await loadLikes();

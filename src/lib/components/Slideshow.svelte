@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
-	import { getAllMediaUrls } from '$lib/mediaUrls';
+	import { extractMedia as extractPostMedia } from '$lib/mediaUrls';
 	import { onDestroy } from 'svelte';
 	import { bulkIsMediaCached, getCachedBlobUrl } from '$lib/stores/db';
 
@@ -65,9 +65,16 @@
 
 	// Extract and flatten media from a post
 	function extractMedia(post: any): FlatMedia[] {
-		const urls = getAllMediaUrls(post);
+		const media = extractPostMedia(post);
+		const videoUrls = new Set(media.videos);
+		const posterUrls = new Set(media.posters);
+		const hasVideos = videoUrls.size > 0;
+		const urls = media.urls.filter((url) => !(hasVideos && posterUrls.has(url)));
 		return urls.map((url, i) => {
-			const isVideo = post.type === 'video' || url.includes('.mp4') || (post.content && post.content.some((b: any) => b.type === 'video' && (b.url === url || b.media?.[0]?.url === url)));
+			const isVideo =
+				videoUrls.has(url) ||
+				/\.(mp4|webm|m3u8)(\?|$)/i.test(url) ||
+				(post.content && post.content.some((b: any) => b.type === 'video' && (b.url === url || b.media?.some((m: any) => m?.url === url))));
 			return {
 				url,
 				isVideo,

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { dev } from "$app/environment";
-	import { accounts } from "$lib/stores/accounts";
+	import { accounts, accountsReady } from "$lib/stores/accounts";
 	import NPFRenderer from "$lib/components/NPFRenderer.svelte";
 	import AvatarImage from "$lib/components/AvatarImage.svelte";
 	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize } from "lucide-svelte";
@@ -118,6 +118,12 @@
 	let rebloggingAccount = $state<string | null>(null);
 
 	async function loadPost() {
+		if (!$accountsReady) {
+			loading = true;
+			error = "";
+			return;
+		}
+
 		const activeAccs = $accounts.filter(a => a.active);
 		if (activeAccs.length === 0) {
 			error = "Please activate at least one account to view details.";
@@ -189,6 +195,13 @@
 	}
 
 	$effect(() => {
+		const ready = $accountsReady;
+		if (!ready) {
+			loading = true;
+			error = "";
+			return;
+		}
+
 		if (blogName && postId) {
 			loadPost();
 		}

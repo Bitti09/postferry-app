@@ -2,7 +2,7 @@
 	import { settings } from "$lib/stores/settings";
 	import { getCachedBlobUrl, downloadAndCacheMedia } from "$lib/stores/db";
 
-	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', thumbnailMode = false, onUnavailable } = $props<{
+	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', thumbnailMode = false, autoCacheEnabled = true, onUnavailable } = $props<{
 		url: string;
 		type?: string;
 		alt?: string;
@@ -10,6 +10,7 @@
 		style?: string;
 		posterUrl?: string;
 		thumbnailMode?: boolean;
+		autoCacheEnabled?: boolean;
 		onUnavailable?: () => void;
 	}>();
 
@@ -77,7 +78,7 @@
 		
 		// For network URLs, we defer to the browser cache (HTTP cache) which is much faster
 		// Only check/download IndexedDB if autoCacheMedia is enabled.
-		if ($settings.autoCacheMedia) {
+		if ($settings.autoCacheMedia && autoCacheEnabled) {
 			getCachedBlobUrl(url).then(async cached => {
 				if (!isSubscribed) return;
 				if (cached?.url) {
@@ -107,7 +108,7 @@
 			return () => { isSubscribed = false; };
 		}
 		
-		if ($settings.autoCacheMedia) {
+		if ($settings.autoCacheMedia && autoCacheEnabled) {
 			getCachedBlobUrl(posterUrl).then(async cached => {
 				if (!isSubscribed) return;
 				if (cached?.url) {
@@ -159,7 +160,7 @@
 			/>
 		{:else}
 			<div class={className} {style}>
-				<div class="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center text-gray-300 text-xs font-semibold text-center px-3">
+				<div class="w-full h-full bg-linear-to-br from-gray-800 to-gray-900 flex items-center justify-center text-gray-300 text-xs font-semibold text-center px-3">
 					Video
 				</div>
 			</div>

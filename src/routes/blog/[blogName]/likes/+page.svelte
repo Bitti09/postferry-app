@@ -4,7 +4,8 @@
 	import { accounts } from '$lib/stores/accounts';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import { ArrowLeft, Filter } from 'lucide-svelte';
+	import Slideshow from '$lib/components/Slideshow.svelte';
+	import { ArrowLeft, Play } from 'lucide-svelte';
 	import { settings } from '$lib/stores/settings';
 
 	let blogName = $page.params.blogName;
@@ -15,6 +16,9 @@
 	let beforeTimestamp: number | null = $state(null);
 	let error = $state('');
 	let fetchController: AbortController | null = null;
+	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | number | null>(null);
+	let slideshowStartPostId = $state<string | number | null>(null);
 	
 	let currentFilter = $state('all');
 
@@ -29,6 +33,16 @@
 	});
 
 	let activeAccount = $derived($accounts.find((a) => a.active));
+
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const el = document.getElementById(`post-${activeSlideshowPostId}`);
+			if (el) {
+				el.scrollIntoView({ behavior: 'instant', block: 'center' });
+			}
+			activeSlideshowPostId = null;
+		}
+	});
 	
 	// Filter logic
 	let filteredLikes = $derived(likes.filter(post => {
@@ -38,6 +52,11 @@
 		if (currentFilter === 'text') return post.type === 'text';
 		return true;
 	}));
+
+	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+		slideshowStartPostId = post?.id ?? null;
+		slideshowActive = true;
+	}
 
 	onMount(() => {
 		if (!activeAccount) {
@@ -105,11 +124,20 @@
 			<p class="text-gray-400 mt-1">Explore what this blog has favorited.</p>
 		</div>
 
-		<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
-			<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
-			<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
-			<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
-			<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+		<div class="flex items-center gap-2 flex-wrap">
+			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
+				<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
+				<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
+				<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
+				<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+			</div>
+			<button
+				class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
+				onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+				disabled={filteredLikes.length === 0}
+			>
+				<Play size={16} /> Play Slideshow
+			</button>
 		</div>
 	</header>
 
@@ -127,10 +155,20 @@
 			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
 		>
 			{#each filteredLikes as post (post.id)}
-				<PostCard {post} />
+				<div id={"post-" + post.id}>
+					<PostCard {post} onMediaClick={openSlideshowFromPost} />
+				</div>
 			{/each}
 		</main>
 	{/if}
 
 	<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
 </div>
+
+<Slideshow
+	bind:active={slideshowActive}
+	bind:activePostId={activeSlideshowPostId}
+	startPostId={slideshowStartPostId}
+	posts={filteredLikes}
+	onReachEnd={async () => { await loadLikes(); }}
+/>

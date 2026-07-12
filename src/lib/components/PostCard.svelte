@@ -6,15 +6,41 @@
 	import CachedMedia from './CachedMedia.svelte';
 	import type { TumblrPost } from '$lib/types';
 
+	const AUTO_CACHE_MAX_ACTIVE = 3;
+	let activeAutoCacheJobs = 0;
+	const autoCacheWaiters: Array<() => void> = [];
+
+	async function acquireAutoCacheSlot(): Promise<void> {
+		if (activeAutoCacheJobs < AUTO_CACHE_MAX_ACTIVE) {
+			activeAutoCacheJobs += 1;
+			return;
+		}
+
+		await new Promise<void>((resolve) => {
+			autoCacheWaiters.push(resolve);
+		});
+		activeAutoCacheJobs += 1;
+	}
+
+	function releaseAutoCacheSlot() {
+		activeAutoCacheJobs = Math.max(0, activeAutoCacheJobs - 1);
+		const next = autoCacheWaiters.shift();
+		if (next) next();
+	}
+
 	let {
 		post,
 		mode = 'normal',
 		onclickOverride,
+		onMediaClick,
+		autoCacheEnabled = true,
 		preCheckedUrls = []
 	} = $props<{
 		post: TumblrPost;
 		mode?: 'normal' | 'cache';
 		onclickOverride?: () => void;
+		onMediaClick?: (post: TumblrPost, mediaUrl?: string) => void;
+		autoCacheEnabled?: boolean;
 		preCheckedUrls?: string[];
 	}>();
 
@@ -71,6 +97,39 @@
 
 	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedUrls.has(u)));
 	let isDownloading = $state(false);
+	let postDetailHref = $derived(`/post/${post.blog_name}/${post.id_string || post.id}`);
+	const DETAIL_ZONE_HEIGHT_PX = 132;
+
+	function openPostDetail() {
+		window.location.href = postDetailHref;
+	}
+
+	function handleMediaClick(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (mode === 'cache') {
+			onclickOverride?.();
+			return;
+		}
+		const targetMediaUrl = mediaInfo.isVideo
+			? (getVideoUrls(post)[0] || mediaInfo.primary)
+			: mediaInfo.primary;
+		if (onMediaClick) {
+			onMediaClick(post, targetMediaUrl);
+			return;
+		}
+		openPostDetail();
+	}
+
+	function handleTextClick(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (mode === 'cache') {
+			onclickOverride?.();
+			return;
+		}
+		openPostDetail();
+	}
 
 	async function downloadPostMedia() {
 			if (isDownloading || isCached) return;
@@ -96,15 +155,20 @@
 		}
 
 	$effect(() => {
-		const autoCache = $settings.autoCacheMedia;
+		const autoCache = $settings.autoCacheMedia && autoCacheEnabled;
 		const urls = mediaInfo.allUrls;
 		if (!autoCache || urls.length === 0 || isCached || isDownloading) return;
 
 		let cancelled = false;
-		isDownloading = true;
 
 		(async () => {
+			let acquired = false;
 			try {
+				await acquireAutoCacheSlot();
+				acquired = true;
+				if (cancelled) return;
+				isDownloading = true;
+
 				for (const url of urls) {
 					if (cancelled || cachedUrls.has(url)) continue;
 					const res = await downloadAndCacheMedia(url);
@@ -116,8 +180,11 @@
 					}
 				}
 			} finally {
-				if (!cancelled) {
+				if (!cancelled && acquired) {
 					isDownloading = false;
+				}
+				if (acquired) {
+					releaseAutoCacheSlot();
 				}
 			}
 		})();
@@ -129,10 +196,9 @@
 </script>
 
 <svelte:element
-	this={mode === 'cache' ? 'div' : 'a'}
+	this="div"
 	role={mode === 'cache' ? 'button' : undefined}
 	tabindex={mode === 'cache' ? 0 : undefined}
-	href={mode === 'normal' ? `/post/${post.blog_name}/${post.id_string || post.id}` : undefined}
 	onkeydown={(e: KeyboardEvent) => {
 		if (mode === 'cache' && (e.key === 'Enter' || e.key === ' ')) {
 			e.preventDefault();
@@ -169,6 +235,7 @@
 				type={mediaInfo.primaryType}
 				posterUrl={mediaInfo.posterUrl}
 				thumbnailMode={true}
+				autoCacheEnabled={autoCacheEnabled}
 				alt={post.summary || 'Tumblr Post'}
 				class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
 				onUnavailable={() => { mediaFailed = true; }}
@@ -181,11 +248,21 @@
 	{/if}
 
 	<!-- Overlays -->
-	<div class="absolute inset-0 bg-linear-to-t from-black/80 via-black/20 to-transparent opacity-80 transition-opacity group-hover:opacity-100"></div>
+	<div class="absolute inset-0 pointer-events-none bg-linear-to-t from-black/80 via-black/20 to-transparent opacity-80 transition-opacity group-hover:opacity-100"></div>
+
+	{#if mode === 'normal'}
+		<button
+			type="button"
+			class="absolute inset-x-0 top-0 z-20 cursor-zoom-in"
+			style={`bottom: ${DETAIL_ZONE_HEIGHT_PX}px;`}
+			aria-label="Open slideshow"
+			onclick={handleMediaClick}
+		></button>
+	{/if}
 
 
 	<!-- Top Left Icons -->
-	<div class="absolute top-3 left-3 flex items-center gap-2 z-10">
+	<div class="absolute top-3 left-3 flex items-center gap-2 z-10 pointer-events-none">
 		<!-- Video Icon -->
 		{#if mediaInfo.isVideo}
 			<div class="text-white/80 drop-shadow-md">
@@ -207,13 +284,26 @@
 
 	<!-- NSFW Badge -->
 	{#if nsfw}
-		<div class="absolute top-3 right-3 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white shadow z-10">
+		<div class="absolute top-3 right-3 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white shadow z-10 pointer-events-none">
 			NSFW
 		</div>
 	{/if}
 
 	<!-- Bottom Info -->
-	<div class="absolute bottom-0 left-0 right-0 p-4 z-10">
+	<div
+		class="absolute bottom-0 left-0 right-0 p-4 z-30 {mode === 'normal' ? 'cursor-pointer' : ''}"
+		style={mode === 'normal' ? `min-height: ${DETAIL_ZONE_HEIGHT_PX}px;` : undefined}
+		role={mode === 'normal' ? 'button' : undefined}
+		tabindex={mode === 'normal' ? 0 : undefined}
+		onkeydown={(e: KeyboardEvent) => {
+			if (mode !== 'normal') return;
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				openPostDetail();
+			}
+		}}
+		onclick={handleTextClick}
+	>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<span 
