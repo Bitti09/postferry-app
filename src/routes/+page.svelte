@@ -158,10 +158,9 @@
 		}
 	
 		bulkIsMediaCached(urls).then(found => {
-			cachedUrlSet = found;
+			cachedUrlSet = new Set([...cachedUrlSet, ...found]);
 			cachedUrlsReady = true;
 		}).catch(() => {
-			cachedUrlSet = new Set();
 			cachedUrlsReady = true;
 		});
 	});
@@ -179,6 +178,11 @@
 	function openSlideshowFromPost(post: TumblrPost, _mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
 		slideshowActive = true;
+	}
+
+	function handleCardCachedUrl(url: string) {
+		if (cachedUrlSet.has(url)) return;
+		cachedUrlSet = new Set([...cachedUrlSet, url]);
 	}
 
 	async function loadPosts(reset = false) {
@@ -471,7 +475,7 @@
 										{#each rowItem.posts as post (post.id)}
 											<div id={"post-" + post.id}>
 												<LazyRender>
-													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} />
+													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
 												</LazyRender>
 											</div>
 										{/each}

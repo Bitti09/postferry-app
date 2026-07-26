@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from 'lucide-svelte';
 	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls, getPosterUrls } from '$lib/mediaUrls';
 	import { settings } from '$lib/stores/settings';
@@ -7,6 +8,7 @@
 	import type { TumblrPost } from '$lib/types';
 
 	const AUTO_CACHE_MAX_ACTIVE = 3;
+	const AUTO_CACHE_DEBUG = false;
 	let activeAutoCacheJobs = 0;
 	const autoCacheWaiters: Array<() => void> = [];
 
@@ -28,11 +30,21 @@
 		if (next) next();
 	}
 
+	function logAutoCache(message: string, extra?: Record<string, unknown>) {
+		if (!AUTO_CACHE_DEBUG) return;
+		console.debug('[AutoCache][PostCard]', message, {
+			postId: post?.id,
+			blogName: post?.blog_name,
+			...extra
+		});
+	}
+
 	let {
 		post,
 		mode = 'normal',
 		onclickOverride,
 		onMediaClick,
+		onCachedUrl,
 		autoCacheEnabled = true,
 		preCheckedUrls = []
 	} = $props<{
@@ -40,6 +52,7 @@
 		mode?: 'normal' | 'cache';
 		onclickOverride?: () => void;
 		onMediaClick?: (post: TumblrPost, mediaUrl?: string) => void;
+		onCachedUrl?: (url: string) => void;
 		autoCacheEnabled?: boolean;
 		preCheckedUrls?: string[];
 	}>();
@@ -134,6 +147,7 @@
 	async function downloadPostMedia() {
 			if (isDownloading || isCached) return;
 			isDownloading = true;
+			logAutoCache('manual-cache-start', { totalUrls: mediaInfo.allUrls.length });
 
 			if (mediaInfo.allUrls.length === 0) {
 				isDownloading = false;
@@ -146,51 +160,89 @@
 					const next = new Set(cachedUrls);
 					next.add(url);
 					cachedUrls = next;
+					onCachedUrl?.(url);
+					logAutoCache('manual-cache-success', { url });
+				} else {
+					logAutoCache('manual-cache-miss', { url });
 				}
 			}))
 				.then(() => {
 					isDownloading = false;
+					logAutoCache('manual-cache-done', { cachedCount: cachedUrls.size });
 				})
-				.catch(() => { isDownloading = false; });
+				.catch((error) => {
+					isDownloading = false;
+					logAutoCache('manual-cache-error', { error: String(error) });
+				});
 		}
 
 	$effect(() => {
 		const autoCache = $settings.autoCacheMedia && autoCacheEnabled;
 		const urls = mediaInfo.allUrls;
-		if (!autoCache || urls.length === 0 || isCached || isDownloading) return;
+		if (!autoCache || urls.length === 0) {
+			logAutoCache('auto-cache-skip', {
+				autoCacheSetting: $settings.autoCacheMedia,
+				autoCacheEnabled,
+				urlCount: urls.length
+			});
+			return;
+		}
 
 		let cancelled = false;
+		logAutoCache('auto-cache-effect-start', {
+			urlCount: urls.length,
+			currentlyCached: cachedUrls.size,
+			activeJobs: activeAutoCacheJobs
+		});
 
 		(async () => {
 			let acquired = false;
 			try {
+				logAutoCache('auto-cache-await-slot', { activeJobs: activeAutoCacheJobs });
 				await acquireAutoCacheSlot();
 				acquired = true;
 				if (cancelled) return;
+				logAutoCache('auto-cache-slot-acquired', { activeJobs: activeAutoCacheJobs });
+
+				const pending = untrack(() => urls.filter((url) => !cachedUrls.has(url)));
+				if (pending.length === 0) {
+					logAutoCache('auto-cache-no-pending');
+					return;
+				}
+				logAutoCache('auto-cache-pending', { pendingCount: pending.length, pending });
+
 				isDownloading = true;
 
-				for (const url of urls) {
-					if (cancelled || cachedUrls.has(url)) continue;
+				for (const url of pending) {
+					if (cancelled) continue;
+					logAutoCache('auto-cache-download-start', { url });
 					const res = await downloadAndCacheMedia(url);
 					if (cancelled) break;
 					if (res?.url) {
 						const next = new Set(cachedUrls);
 						next.add(url);
 						cachedUrls = next;
+						onCachedUrl?.(url);
+						logAutoCache('auto-cache-download-success', { url, cachedCount: cachedUrls.size });
+					} else {
+						logAutoCache('auto-cache-download-miss', { url });
 					}
 				}
 			} finally {
 				if (!cancelled && acquired) {
 					isDownloading = false;
+					logAutoCache('auto-cache-finished', { cachedCount: cachedUrls.size });
 				}
 				if (acquired) {
 					releaseAutoCacheSlot();
+					logAutoCache('auto-cache-slot-released', { activeJobs: activeAutoCacheJobs });
 				}
 			}
 		})();
 
 		return () => {
 			cancelled = true;
+			logAutoCache('auto-cache-cancelled');
 		};
 	});
 </script>

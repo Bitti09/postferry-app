@@ -7,15 +7,33 @@ interface Settings {
 }
 
 const defaultSettings: Settings = {
-    autoCacheMedia: false,
+    autoCacheMedia: true,
     mediaColumns: 'auto',
     blogCardColumns: 'auto'
 };
 
 function createSettingsStore() {
-    // Load from local storage if available
+    // Load from local storage if available.
     const stored = typeof window !== 'undefined' ? localStorage.getItem('tmblr_settings') : null;
-    const initial = stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+    let initial: Settings = defaultSettings;
+
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            initial = { ...defaultSettings, ...parsed };
+        } catch {
+            initial = defaultSettings;
+        }
+    }
+
+    // Migration: older installs persisted autoCacheMedia=false by default.
+    // Enable auto-cache by default unless the user explicitly turns it off afterward.
+    if (!initial.autoCacheMedia) {
+        initial = { ...initial, autoCacheMedia: true };
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('tmblr_settings', JSON.stringify(initial));
+        }
+    }
 
     const { subscribe, set, update } = writable<Settings>(initial);
 
