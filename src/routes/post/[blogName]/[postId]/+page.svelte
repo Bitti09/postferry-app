@@ -314,13 +314,17 @@
 
 	// Count total media blocks across trail + post content
 	let reblogTextOnly = $state(false);
-	let mediaCount = $derived(() => {
-		if (!post) return 0;
-		const countBlocks = (blocks: any[]) =>
-			(blocks || []).filter((b: any) => b.type === 'image' || b.type === 'video').length;
-		const trailCount = (post.trail || []).reduce((sum: number, item: any) => sum + countBlocks(item.content || []), 0);
-		return trailCount + countBlocks(post.content || []);
-	});
+	let mediaCount = $derived(
+		!post
+			? 0
+			: ((post.trail || []).reduce(
+					(sum: number, item: any) =>
+						sum +
+						((item.content || []).filter((b: any) => b.type === 'image' || b.type === 'video').length),
+					0
+			  ) +
+			  ((post.content || []).filter((b: any) => b.type === 'image' || b.type === 'video').length))
+	);
 
 	// Reblog header fallback values that gracefully handle broken trail items.
 	let trailFirst = $derived(post?.trail?.[0]);
@@ -479,7 +483,7 @@
 						</div>
 
 						<!-- Layout Switcher Tabs — only when more than 1 media item -->
-						{#if mediaCount() > 1}
+						{#if mediaCount > 1}
 						<div class="flex p-1 bg-gray-900 rounded-2xl border border-gray-800 mb-2">
 							<button 
 								class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl transition-all font-black text-xs {useGrid ? 'bg-primary text-white shadow-lg' : 'text-gray-400 hover:text-white'}"

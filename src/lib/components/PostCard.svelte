@@ -196,7 +196,7 @@
 </script>
 
 <svelte:element
-	this="div"
+	this={'div'}
 	role={mode === 'cache' ? 'button' : undefined}
 	tabindex={mode === 'cache' ? 0 : undefined}
 	onkeydown={(e: KeyboardEvent) => {
@@ -289,7 +289,7 @@
 		</div>
 	{/if}
 
-	<!-- Bottom Info -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<div
 		class="absolute bottom-0 left-0 right-0 p-4 z-30 {mode === 'normal' ? 'cursor-pointer' : ''}"
 		style={mode === 'normal' ? `min-height: ${DETAIL_ZONE_HEIGHT_PX}px;` : undefined}

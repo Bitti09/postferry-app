@@ -60,6 +60,9 @@
 		return getAutoColumnCount(width);
 	});
 
+	let currentFilter = $state<PostFilter>("all");
+	let filteredLikes = $derived(filterPosts(likes, currentFilter));
+
 	let rowCount = $derived(Math.ceil(filteredLikes.length / columnCount));
 	let cardWidth = $derived.by(() => {
 		if (columnCount <= 0 || containerWidth <= 0) return 0;
@@ -118,8 +121,6 @@
 	});
 	
 	let fetchController: AbortController | null = null;
-	
-	let currentFilter = $state<PostFilter>("all");
 
 	const FILTERS: { value: PostFilter; label: string }[] = [
 		{ value: "all", label: "All" },
@@ -154,9 +155,6 @@
 			prevAccountsStr = value.prevAccountsStr || "";
 		},
 	};
-
-	let filteredLikes = $derived(filterPosts(likes, currentFilter));
-
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
 	let consecutiveAutoFetches = 0;

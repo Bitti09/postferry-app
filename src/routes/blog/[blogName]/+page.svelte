@@ -151,7 +151,10 @@
 		}
 	});
 
-	onMount(async () => {
+	onMount(() => {
+		let cleanup: (() => void) | undefined;
+
+		void (async () => {
 		// Accounts load async from IndexedDB; wait for them before proceeding
 		if ($accounts.length === 0) {
 			// Wait briefly for accounts to load from IndexedDB, retry up to 2s
@@ -223,12 +226,15 @@
 				refreshVirtualMetrics();
 			});
 
-			return () => {
+			cleanup = () => {
 				window.removeEventListener('resize', onResize);
 				window.removeEventListener('scroll', onScroll);
 				resizeObserver.disconnect();
 			};
 		}
+		})();
+
+		return () => cleanup?.();
 	});
 
 	$effect(() => {

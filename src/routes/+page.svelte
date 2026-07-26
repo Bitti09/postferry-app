@@ -67,6 +67,9 @@
 		return getAutoColumnCount(width);
 	});
 
+	let currentFilter = $state<PostFilter>('all');
+	let filteredPosts = $derived(filterPosts(posts, currentFilter));
+
 	let rowCount = $derived(Math.ceil(filteredPosts.length / columnCount));
 	let cardWidth = $derived.by(() => {
 		if (columnCount <= 0 || gridWidth <= 0) return 0;
@@ -141,14 +144,8 @@
 	
 	let fetchController: AbortController | null = null;
 	
-	let currentFilter = $state<PostFilter>('all');
-
-	// Reactive active accounts
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
-	let filteredPosts = $derived(filterPosts(posts, currentFilter));
-
-	// Async computed cached URLs
 	let cachedUrlSet = $state<Set<string>>(new Set());
 	let cachedUrlsReady = $state(false);
 
