@@ -10,16 +10,16 @@ export default defineConfig({
         SvelteKitPWA({
             srcDir: './src',
             mode: 'development',
-            strategies: 'generateSW',
+            strategies: 'injectManifest',
+            filename: 'service-worker.ts',
             registerType: 'autoUpdate',
             injectRegister: 'auto',
             devOptions: {
                 enabled: true,
                 type: 'module'
             },
-            workbox: {
-                globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-                globIgnores: ['**/node_modules/**/*']
+            injectManifest: {
+                globPatterns: ['client/**/*.{js,css,ico,png,svg,webp,woff,woff2}']
             },
             manifest: {
                 short_name: 'tmblr',

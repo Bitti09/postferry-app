@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { settings } from "$lib/stores/settings";
-	import { HardDrive, Settings as SettingsIcon, LayoutGrid, Bug, Image, BookOpen } from "lucide-svelte";
+	import { HardDrive, Settings as SettingsIcon, LayoutGrid, Bug, Image, BookOpen } from "@lucide/svelte";
 
 	let windowWidth = $state(1024);
 

@@ -24,6 +24,8 @@ export interface MediaObject {
 	original_dimensions_missing?: boolean;
 	has_original_dimensions?: boolean;
 	cropped?: boolean;
+	hd?: boolean;
+	poster?: MediaObject | MediaObject[];
 }
 
 export type MediaItem = MediaObject;
@@ -45,18 +47,24 @@ export interface ImageBlock {
 	alt_text?: string;
 	attribution?: MediaAttribution;
 	colors?: Record<string, string>;
+	feedback_token?: string;
+	poster?: MediaObject | MediaObject[];
 }
 
 export interface VideoBlock {
 	type: 'video';
-	media: MediaObject[];
+	media?: MediaObject[];
 	poster?: MediaObject[];
 	thumbnail_url?: string;
 	caption?: string;
 	attribution?: MediaAttribution;
 	url?: string;
 	embed_html?: string;
+	embed_iframe?: { url: string; width: number; height: number };
+	embed_url?: string;
 	provider?: string;
+	metadata?: any;
+	filmstrip?: MediaObject | MediaObject[];
 }
 
 export interface AudioBlock {
@@ -205,6 +213,7 @@ export interface TumblrPost {
 	can_send_in_message?: boolean;
 	followed?: boolean;
 	liked?: boolean;
+	liked_timestamp?: number;
 	reblogged?: boolean;
 	reblog_key?: string;
 	reblogged_from_id?: string;
@@ -279,6 +288,7 @@ export interface TumblrUser {
 	following: number;
 	default_post_format: string;
 	blogs: TumblrBlog[];
+	email?: string;
 }
 
 // ─── Account (App-specific) ─────────────────────────────────────────────────
@@ -318,6 +328,7 @@ export interface MediaExtraction {
 	videos: string[];
 	images: string[];
 	posters: string[];
+	filmstrips: string[];
 }
 
 // ─── Cache Types ──────────────────────────────────────────────────

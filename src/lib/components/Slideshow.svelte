@@ -1,21 +1,23 @@
 <script lang="ts">
-	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from 'lucide-svelte';
+	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { extractMedia as extractPostMedia } from '$lib/mediaUrls';
 	import { onDestroy } from 'svelte';
-	import { bulkIsMediaCached, getCachedBlobUrl } from '$lib/stores/db';
+	import CachedMedia from './CachedMedia.svelte';
 
-	let { 
-		active = $bindable(false), 
-		posts = [], 
+	let {
+		active = $bindable(false),
+		posts = [],
 		onReachEnd = async () => {},
 		activePostId = $bindable<string | number | null>(null),
-		startPostId = null
-	} = $props<{ 
-		active?: boolean, 
-		posts: any[], 
+		startPostId = null,
+		startMediaUrl = null
+	} = $props<{
+		active?: boolean,
+		posts: any[],
 		onReachEnd?: () => Promise<void>,
 		activePostId?: string | number | null,
-		startPostId?: string | number | null
+		startPostId?: string | number | null,
+		startMediaUrl?: string | null
 	}>();
 
 	type FlatMedia = {
@@ -55,13 +57,8 @@
 			previousPostIds = nextPostIds;
 		}
 	});
-	let blobMap = $state<Record<string, string>>({});
-	let checkedCacheStatusUrls = new Set<string>();
-	let inFlightBlobUrls = new Set<string>();
-	let createdBlobObjectUrls = new Set<string>();
 
 	const PREFETCH_RADIUS = 12;
-	const BLOB_FETCH_CONCURRENCY = 6;
 
 	// Extract and flatten media from a post
 	function extractMedia(post: any): FlatMedia[] {
@@ -69,7 +66,8 @@
 		const videoUrls = new Set(media.videos);
 		const posterUrls = new Set(media.posters);
 		const hasVideos = videoUrls.size > 0;
-		const urls = media.urls.filter((url) => !(hasVideos && posterUrls.has(url)));
+		const filmstripUrls = new Set(media.filmstrips || []);
+		const urls = media.urls.filter((url) => !(hasVideos && posterUrls.has(url)) && !filmstripUrls.has(url));
 		return urls.map((url, i) => {
 			const isVideo =
 				videoUrls.has(url) ||
@@ -98,78 +96,6 @@
 		}
 	});
 
-	// Resolve cached blobs around the current slide to avoid expensive full-list scans.
-	$effect(() => {
-		if (!active || flatMedia.length === 0) {
-			return;
-		}
-		resolveBlobsAroundCurrent();
-	});
-
-	function getPrefetchWindowUrls(): string[] {
-		if (flatMedia.length === 0) return [];
-		const start = Math.max(0, currentIndex - PREFETCH_RADIUS);
-		const end = Math.min(flatMedia.length, currentIndex + PREFETCH_RADIUS + 1);
-		const urls: string[] = [];
-		for (let i = start; i < end; i++) {
-			const url = flatMedia[i]?.url;
-			if (url) urls.push(url);
-		}
-		return urls;
-	}
-
-	async function resolveBlobsAroundCurrent() {
-		const candidateUrls = getPrefetchWindowUrls().filter(
-			(url) => !checkedCacheStatusUrls.has(url) && !inFlightBlobUrls.has(url) && !blobMap[url]
-		);
-		if (candidateUrls.length === 0) return;
-
-		const cachedSet = await bulkIsMediaCached(candidateUrls);
-		for (const url of candidateUrls) {
-			checkedCacheStatusUrls.add(url);
-		}
-
-		const queue = candidateUrls.filter((url) => cachedSet.has(url));
-		if (queue.length === 0) return;
-
-		for (const url of queue) {
-			inFlightBlobUrls.add(url);
-		}
-
-		async function worker() {
-			while (queue.length > 0) {
-				const url = queue.shift();
-				if (!url) continue;
-				try {
-					const cached = await getCachedBlobUrl(url);
-					if (cached?.url) {
-						blobMap[url] = cached.url;
-						createdBlobObjectUrls.add(cached.url);
-					}
-				} finally {
-					inFlightBlobUrls.delete(url);
-				}
-			}
-		}
-
-		void Promise.all(
-			Array.from(
-				{ length: Math.min(BLOB_FETCH_CONCURRENCY, queue.length) },
-				() => worker()
-			)
-		);
-	}
-
-	function resetBlobState() {
-		for (const objectUrl of createdBlobObjectUrls) {
-			URL.revokeObjectURL(objectUrl);
-		}
-		createdBlobObjectUrls = new Set();
-		checkedCacheStatusUrls = new Set();
-		inFlightBlobUrls = new Set();
-		blobMap = {};
-	}
-
 	// Check if we need more posts
 	$effect(() => {
 		if (active && flatMedia.length > 0) {
@@ -177,32 +103,47 @@
 		}
 	});
 
-	// Reset index when opened (optional, maybe we want to keep it?)
+	// Reset index when opened
 	$effect(() => {
 		if (!active) {
 			currentIndex = 0;
-			resetBlobState();
 		}
 	});
 
-	// Start from a specific post when requested by the parent.
+	// Start from a specific post (and optionally media URL) when requested by the parent.
 	let lastAppliedStartPostId = $state<string | number | null>(null);
+	let lastAppliedStartMediaUrl = $state<string | null>(null);
 	$effect(() => {
 		if (!active) {
 			lastAppliedStartPostId = null;
+			lastAppliedStartMediaUrl = null;
 			return;
 		}
 
-		if (startPostId == null || startPostId === lastAppliedStartPostId) {
-			return;
-		}
+		const postChanged = startPostId != null && startPostId !== lastAppliedStartPostId;
+		const urlChanged = startMediaUrl != null && startMediaUrl !== lastAppliedStartMediaUrl;
+		if (startPostId == null && startMediaUrl == null) return;
+		if (!postChanged && !urlChanged) return;
 
-		const targetIndex = flatMedia.findIndex((item) => String(item.post?.id) === String(startPostId));
+		let targetIndex = -1;
+		if (startMediaUrl && startPostId != null) {
+			targetIndex = flatMedia.findIndex(
+				(item) => String(item.post?.id) === String(startPostId) && item.url === startMediaUrl
+			);
+		}
+		if (targetIndex < 0 && startMediaUrl) {
+			const idx = flatMedia.findIndex((item) => item.url === startMediaUrl);
+			if (idx >= 0) targetIndex = idx;
+		}
+		if (targetIndex < 0 && startPostId != null) {
+			targetIndex = flatMedia.findIndex((item) => String(item.post?.id) === String(startPostId));
+		}
 		if (targetIndex >= 0) {
 			currentIndex = targetIndex;
 		}
 
 		lastAppliedStartPostId = startPostId;
+		lastAppliedStartMediaUrl = startMediaUrl;
 	});
 
 	async function next() {
@@ -221,10 +162,6 @@
 	function close() {
 		active = false;
 	}
-
-	onDestroy(() => {
-		resetBlobState();
-	});
 
 	async function checkPrefetch() {
 		if (currentIndex >= flatMedia.length - 5 && !isFetchingMore) {
@@ -343,22 +280,13 @@
 			{#if flatMedia.length === 0}
 				<Loader2 size={48} class="text-white animate-spin" />
 			{:else if currentItem}
-				{#if currentItem.isVideo}
-					<video 
-						controls 
-						class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg" 
-						src={blobMap[currentItem.url] || currentItem.url}
-					>
-						<track kind="captions" />
-					</video>
-				{:else}
-					<img 
-						src={blobMap[currentItem.url] || currentItem.url} 
-						alt="Slideshow Media" 
-						class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg select-none" 
-						loading="eager"
-					/>
-				{/if}
+				<CachedMedia 
+					url={currentItem.url}
+					type={currentItem.isVideo ? 'video/mp4' : 'image/jpeg'}
+					class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg"
+					autoplay={currentItem.isVideo}
+					post={currentItem.post}
+				/>
 			{/if}
 		</div>
 

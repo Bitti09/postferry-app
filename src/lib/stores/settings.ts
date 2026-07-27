@@ -1,60 +1,48 @@
-import { writable } from "svelte/store";
+// ─── Settings store ─────────────────────────────────────────────────────────
 
-interface Settings {
-    autoCacheMedia: boolean;
-    mediaColumns: string;
-    blogCardColumns: string;
-}
+import { writable } from 'svelte/store';
+import { browser } from '$app/environment';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS, type Settings } from '$lib/cache/meta';
 
-const defaultSettings: Settings = {
-    autoCacheMedia: true,
-    mediaColumns: 'auto',
-    blogCardColumns: 'auto'
-};
+export { DEFAULT_SETTINGS, type Settings };
 
 function createSettingsStore() {
-    // Load from local storage if available.
-    const stored = typeof window !== 'undefined' ? localStorage.getItem('tmblr_settings') : null;
-    let initial: Settings = defaultSettings;
+	let ready = false;
+	const { subscribe, set, update } = writable<Settings>({ ...DEFAULT_SETTINGS });
 
-    if (stored) {
-        try {
-            const parsed = JSON.parse(stored);
-            initial = { ...defaultSettings, ...parsed };
-        } catch {
-            initial = defaultSettings;
-        }
-    }
+	if (browser) {
+		void loadSettings()
+			.then((loaded) => {
+				let next = loaded;
+				if (!next.autoCacheMedia) {
+					next = { ...next, autoCacheMedia: true };
+					void saveSettings(next);
+				}
+				set(next);
+				ready = true;
+			})
+			.catch(() => {
+				ready = true;
+			});
+	}
 
-    // Migration: older installs persisted autoCacheMedia=false by default.
-    // Enable auto-cache by default unless the user explicitly turns it off afterward.
-    if (!initial.autoCacheMedia) {
-        initial = { ...initial, autoCacheMedia: true };
-        if (typeof window !== 'undefined') {
-            localStorage.setItem('tmblr_settings', JSON.stringify(initial));
-        }
-    }
-
-    const { subscribe, set, update } = writable<Settings>(initial);
-
-    return {
-        subscribe,
-        set: (value: Settings) => {
-            if (typeof window !== 'undefined') {
-                localStorage.setItem('tmblr_settings', JSON.stringify(value));
-            }
-            set(value);
-        },
-        update: (updater: (value: Settings) => Settings) => {
-            update((current) => {
-                const next = updater(current);
-                if (typeof window !== 'undefined') {
-                    localStorage.setItem('tmblr_settings', JSON.stringify(next));
-                }
-                return next;
-            });
-        }
-    };
+	return {
+		subscribe,
+		set: (value: Settings) => {
+			if (browser) void saveSettings(value);
+			set(value);
+		},
+		update: (updater: (value: Settings) => Settings) => {
+			update((current) => {
+				const next = updater(current);
+				if (browser) void saveSettings(next);
+				return next;
+			});
+		},
+		isReady(): boolean {
+			return ready;
+		}
+	};
 }
 
 export const settings = createSettingsStore();

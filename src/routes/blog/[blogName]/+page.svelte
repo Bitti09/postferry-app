@@ -6,11 +6,14 @@
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { ArrowLeft, Heart, Play } from 'lucide-svelte';
+	import { ArrowLeft, Heart, Play } from '@lucide/svelte';
 	import { settings } from '$lib/stores/settings';
+	import { getCachedBlogInfo, setCachedBlogInfo, bulkSetPosts } from '$lib/cache';
+	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
 
-	let blogName = $page.params.blogName;
-	
+
+	let blogName: string = $page.params.blogName ?? '';
+
 	let info: any = $state(null);
 	let posts: any[] = $state([]);
 	let loadingInfo = $state(true);
@@ -18,11 +21,13 @@
 	let hasMore = $state(true);
 	let beforeId: number | null = $state(null);
 	let error = $state('');
+	let isOffline = $state(false);
 	let fetchController: AbortController | null = null;
 	let gridContainer = $state<HTMLElement | null>(null);
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
 	let slideshowStartPostId = $state<string | number | null>(null);
+	let slideshowStartMediaUrl = $state<string | null>(null);
 
 	const GRID_GAP_PX = 16;
 	const VIRTUAL_OVERSCAN_ROWS = 8;
@@ -39,7 +44,8 @@
 		if (width >= 1024) return 5;
 		if (width >= 768) return 4;
 		if (width >= 640) return 3;
-		return 2;
+		if (width >= 480) return 2;
+		return 1;
 	}
 	
 	let currentFilter = $state('all');
@@ -129,8 +135,9 @@
 		updateGridMetrics();
 	}
 
-	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+	function openSlideshowFromPost(post: any, mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
+		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
@@ -152,7 +159,19 @@
 	});
 
 	onMount(() => {
-		let cleanup: (() => void) | undefined;
+		const cleanups: Array<() => void> = [];
+
+		if (browser) {
+			isOffline = !navigator.onLine;
+			const onOnline = () => { isOffline = false; };
+			const onOffline = () => { isOffline = true; };
+			window.addEventListener('online', onOnline);
+			window.addEventListener('offline', onOffline);
+			cleanups.push(() => {
+				window.removeEventListener('online', onOnline);
+				window.removeEventListener('offline', onOffline);
+			});
+		}
 
 		void (async () => {
 		// Accounts load async from IndexedDB; wait for them before proceeding
@@ -171,11 +190,9 @@
 			return;
 		}
 
-		// LocalStorage caching for offline support
-		if (typeof localStorage !== 'undefined') {
-			const cached = localStorage.getItem(`tumblr_blog_info_${blogName}`);
-			if (cached) info = JSON.parse(cached);
-		}
+		// IndexedDB-cached blog info for offline support
+		const cached = await getCachedBlogInfo(blogName);
+		if (cached?.full) info = cached.full;
 
 		if (typeof navigator !== 'undefined' && !navigator.onLine) {
 			loadingInfo = false;
@@ -193,9 +210,14 @@
 			if (resInfo.ok) {
 				const data = await resInfo.json();
 				info = data.info;
-				if (typeof localStorage !== 'undefined') {
-					localStorage.setItem(`tumblr_blog_info_${blogName}`, JSON.stringify(info));
-				}
+				await setCachedBlogInfo(blogName, {
+					blogName,
+					share_likes: info?.share_likes ?? false,
+					likes: info?.likes,
+					updated: info?.updated,
+					full: info,
+					cachedAt: Date.now()
+				});
 			}
 		} catch (e) {
 			console.error(e);
@@ -226,15 +248,18 @@
 				refreshVirtualMetrics();
 			});
 
-			cleanup = () => {
+			const resizeCleanup = () => {
 				window.removeEventListener('resize', onResize);
 				window.removeEventListener('scroll', onScroll);
 				resizeObserver.disconnect();
 			};
+			cleanups.push(resizeCleanup);
 		}
 		})();
 
-		return () => cleanup?.();
+		return () => {
+			for (const fn of cleanups) fn();
+		};
 	});
 
 	$effect(() => {
@@ -249,6 +274,10 @@
 
 	async function loadPosts() {
 		if (!activeAccount || loadingPosts || !hasMore) return;
+		if (isOffline) {
+			loadingPosts = false;
+			return;
+		}
 		loadingPosts = true;
 		fetchController = new AbortController();
 
@@ -276,6 +305,7 @@
 				} else {
 					posts = [...posts, ...uniqueNew];
 					beforeId = Math.min(...uniqueNew.map((p: any) => p.id));
+					void bulkSetPosts(uniqueNew).then(() => refreshUnreferencedPosts());
 				}
 			}
 		} catch (err: any) {
@@ -352,7 +382,7 @@
 			</div>
 			<button
 				class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-				onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+				onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
 				disabled={filteredPosts.length === 0}
 			>
 				<Play size={16} /> Play Slideshow
@@ -396,6 +426,7 @@
 	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
+	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredPosts}
 	onReachEnd={async () => { await loadPosts(); }}
 />

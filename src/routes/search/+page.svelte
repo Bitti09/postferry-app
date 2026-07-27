@@ -4,13 +4,15 @@
 	import { page } from '$app/stores';
 	import { accounts } from '$lib/stores/accounts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
+	import { bulkSetPosts } from '$lib/cache';
 	import { settings } from '$lib/stores/settings';
+	import type { TumblrPost } from '$lib/types';
+
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import PostCard from '$lib/components/PostCard.svelte';
-	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { Search, Loader2, Play, Grid, Home, Heart, X, Download } from 'lucide-svelte';
+	import { Search, Loader2, Play, Grid, Home, Heart, X, Download } from '@lucide/svelte';
 
 	let query = $state('');
 	let posts: any[] = $state([]);
@@ -21,6 +23,7 @@
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
 	let slideshowStartPostId = $state<string | number | null>(null);
+	let slideshowStartMediaUrl = $state<string | null>(null);
 	let gridContainer = $state<HTMLElement | null>(null);
 
 	const GRID_GAP_PX = 16;
@@ -38,7 +41,8 @@
 		if (width >= 1024) return 5;
 		if (width >= 768) return 4;
 		if (width >= 640) return 3;
-		return 2;
+		if (width >= 480) return 2;
+		return 1;
 	}
 
 	$effect(() => {
@@ -155,8 +159,9 @@
 		downloadingAll = false;
 	}
 
-	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+	function openSlideshowFromPost(post: any, mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
+		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
@@ -164,6 +169,10 @@
 		console.log(`[Search Debug] performSearch() called. reset=${reset}, query="${query}", loading=${loading}, activeAccount=${activeAccount?.blogName}`);
 		if (!activeAccount || !query) {
 			console.log(`[Search Debug] Aborting: Missing activeAccount or query.`);
+			return;
+		}
+		if (isOffline) {
+			console.log(`[Search Debug] Aborting: Offline.`);
 			return;
 		}
 		if (loading) {
@@ -203,18 +212,21 @@
 				throw new Error('Search failed: ' + errText);
 			}
 			const payload = await res.json();
-			const newPosts = Array.isArray(payload) ? payload : (payload.posts || []);
+			const newPosts: TumblrPost[] = Array.isArray(payload) ? payload : (payload.posts || []);
 			console.log(`[Search Debug] Received ${newPosts.length} posts from API.`);
 
 			if (newPosts.length === 0) {
 				hasMore = false;
 				console.log(`[Search Debug] hasMore set to false because 0 posts were returned.`);
 			} else {
-				posts = [...posts, ...newPosts];
-				
+				const existingIds = new Set(posts.map((p) => p.id));
+				const uniqueNew = newPosts.filter((p) => !existingIds.has(p.id));
+				posts = [...posts, ...uniqueNew];
+				void bulkSetPosts(uniqueNew);
+
 				// All searches are now tag searches, use timestamp
-				const lastPost = newPosts[newPosts.length - 1];
-				paginationValue = lastPost.featured_timestamp || lastPost.timestamp;
+				const lastPost = uniqueNew[uniqueNew.length - 1] ?? newPosts[newPosts.length - 1];
+				paginationValue = (lastPost as any)?.featured_timestamp || lastPost?.timestamp;
 				console.log(`[Search Debug] Pagination updated to timestamp: ${paginationValue}`);
 			}
 		} catch (err: any) {
@@ -223,42 +235,51 @@
 		} finally {
 			loading = false;
 		}
+}
+
+function handleKeydown(e: KeyboardEvent) {
+	if (e.key === 'Enter') {
+		performSearch(true);
 	}
+}
 
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter') {
-			performSearch(true);
-		}
-	}
+onMount(() => {
+	if (!browser) return;
 
-	onMount(() => {
-		if (!browser) return;
+	isOffline = !navigator.onLine;
 
-		const onResize = () => refreshVirtualMetrics();
-		const onScroll = () => {
-			scrollY = window.scrollY;
-		};
+	const onOnline = () => { isOffline = false; };
+	const onOffline = () => { isOffline = true; };
+	window.addEventListener('online', onOnline);
+	window.addEventListener('offline', onOffline);
 
-		window.addEventListener('resize', onResize);
-		window.addEventListener('scroll', onScroll, { passive: true });
+	const onResize = () => refreshVirtualMetrics();
+	const onScroll = () => {
+		scrollY = window.scrollY;
+	};
 
-		const resizeObserver = new ResizeObserver(() => {
-			updateGridMetrics();
-		});
-		if (gridContainer) {
-			resizeObserver.observe(gridContainer);
-		}
+	window.addEventListener('resize', onResize);
+	window.addEventListener('scroll', onScroll, { passive: true });
 
-		requestAnimationFrame(() => {
-			refreshVirtualMetrics();
-		});
-
-		return () => {
-			window.removeEventListener('resize', onResize);
-			window.removeEventListener('scroll', onScroll);
-			resizeObserver.disconnect();
-		};
+	const resizeObserver = new ResizeObserver(() => {
+		updateGridMetrics();
 	});
+	if (gridContainer) {
+		resizeObserver.observe(gridContainer);
+	}
+
+	requestAnimationFrame(() => {
+		refreshVirtualMetrics();
+	});
+
+	return () => {
+		window.removeEventListener('online', onOnline);
+		window.removeEventListener('offline', onOffline);
+		window.removeEventListener('resize', onResize);
+		window.removeEventListener('scroll', onScroll);
+		resizeObserver.disconnect();
+	};
+});
 
 	$effect(() => {
 		gridContainer;
@@ -336,9 +357,9 @@
 				</div>
 
 				<div class="flex items-center gap-2">
-					<button 
+					<button
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-						onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+						onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
 						disabled={filteredPosts.length === 0}
 					>
 						<Play size={16} /> Play Slideshow
@@ -395,9 +416,7 @@
 							>
 								{#each rowItem.posts as post (post.id)}
 									<div id={"post-" + post.id}>
-										<LazyRender>
-											<PostCard {post} onMediaClick={openSlideshowFromPost} />
-										</LazyRender>
+										<PostCard {post} onMediaClick={openSlideshowFromPost} />
 									</div>
 								{/each}
 							</div>
@@ -432,11 +451,12 @@
 </div>
 
 {#if slideshowActive}
-	<Slideshow 
-		bind:active={slideshowActive} 
+	<Slideshow
+		bind:active={slideshowActive}
 		bind:activePostId={activeSlideshowPostId}
 		startPostId={slideshowStartPostId}
-		posts={filteredPosts} 
-		onReachEnd={() => performSearch(false)} 
+		startMediaUrl={slideshowStartMediaUrl}
+		posts={filteredPosts}
+		onReachEnd={() => performSearch(false)}
 	/>
 {/if}

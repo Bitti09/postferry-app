@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PlayCircle } from "lucide-svelte";
+	import { PlayCircle } from "@lucide/svelte";
 	import NPFCarousel from "./NPFCarousel.svelte";
 	import NPFText from "./NPFText.svelte";
 	import NPFAsk from "./NPFAsk.svelte";
@@ -270,7 +270,7 @@
 			{@const vidUrl = originalVid ? originalVid.url : (mediaArray[0]?.url || block.url)}
 			{#if vidUrl}
 				<div class="rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video my-8 relative group border border-gray-800 max-h-[75vh]">
-					{#if block.media?.[0]?.type === "video/mp4" || vidUrl.includes(".mp4")}
+					{#if block.media?.[0]?.type?.startsWith("video/") || vidUrl.includes(".mp4") || vidUrl.includes(".webm") || !block.provider || block.provider === 'tumblr'}
 						<CachedMedia
 							url={vidUrl}
 							type={block.media?.[0]?.type || "video/mp4"}
@@ -278,9 +278,39 @@
 							class="w-full h-full object-contain"
 						/>
 					{:else}
-						<iframe src={vidUrl} class="w-full h-full" title="Video content" allowfullscreen></iframe>
+						{@const fallbackHref = block.attribution?.url || vidUrl}
+						{@const fallbackHost = (() => { try { return new URL(fallbackHref).hostname; } catch { return ''; } })()}
+						<a
+							href={fallbackHref}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-gray-900 to-black hover:from-gray-800 hover:to-gray-900 transition-colors group/link"
+						>
+							{#if block.poster?.[0]?.url || block.thumbnail_url}
+								<CachedMedia
+									url={block.poster?.[0]?.url || block.thumbnail_url}
+									type="image"
+									thumbnailMode={true}
+									class="absolute inset-0 w-full h-full object-cover opacity-30 group-hover/link:opacity-40 transition-opacity"
+								/>
+							{/if}
+							<div class="relative z-10 flex flex-col items-center gap-3 p-6 text-center max-w-md">
+								<div class="w-16 h-16 rounded-full bg-primary/90 flex items-center justify-center shadow-2xl group-hover/link:scale-110 transition-transform">
+									<PlayCircle size={32} />
+								</div>
+								<div class="space-y-1">
+									<p class="text-white font-black text-lg">Watch external video</p>
+									<p class="text-gray-400 text-xs font-mono uppercase tracking-widest break-all">
+										{block.attribution?.app_name || fallbackHost || 'External'}
+									</p>
+								</div>
+								<span class="text-[10px] text-gray-500 uppercase tracking-widest group-hover/link:text-primary transition-colors">
+									Open in new tab →
+								</span>
+							</div>
+						</a>
 					{/if}
-					
+
 					{#if block.attribution}
 						<div class="absolute bottom-4 left-4 right-4 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
 							<span class="px-3 py-1 bg-black/60 backdrop-blur rounded-lg text-[10px] text-white uppercase font-black">

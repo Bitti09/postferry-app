@@ -1,32 +1,35 @@
+// ─── Accounts store ─────────────────────────────────────────────────────────
+// Reactive `accounts` writable backed by the `accounts` IDB store. Persists
+// via debounced `saveAllAccounts` (single-tx put+delete, not clear+put).
+
 import { writable, type Writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { loadCachedAccounts, saveCachedAccounts } from '$lib/db/accounts';
+import { loadAllAccounts, saveAllAccounts } from '$lib/cache/meta';
 import type { TumblrAccount } from '$lib/types';
 
 const DEBOUNCE_MS = 300;
 
-/** Becomes `true` after the first IndexedDB load attempt completes (even if empty). */
 export const accountsReady = writable(false);
 
 function createAccountsStore() {
 	const { subscribe, set, update }: Writable<TumblrAccount[]> = writable([]);
-
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function scheduleSave(accounts: TumblrAccount[]): void {
 		if (!browser) return;
 		if (saveTimer) clearTimeout(saveTimer);
-		saveTimer = setTimeout(() => saveCachedAccounts(accounts), DEBOUNCE_MS);
+		saveTimer = setTimeout(() => void saveAllAccounts(accounts), DEBOUNCE_MS);
 	}
 
-	// Initialize from IndexedDB
 	if (browser) {
-		loadCachedAccounts().then((cached) => {
-			if (cached?.length) set(cached);
-			// Always signal readiness so consumers can distinguish
-			// "not loaded yet" from "loaded and truly empty"
-			accountsReady.set(true);
-		});
+		loadAllAccounts()
+			.then((cached) => {
+				if (cached?.length) set(cached);
+				accountsReady.set(true);
+			})
+			.catch(() => {
+				accountsReady.set(true);
+			});
 	}
 
 	return {
@@ -35,7 +38,7 @@ function createAccountsStore() {
 			update((accounts) => {
 				const idx = accounts.findIndex((a) => a.blogName === account.blogName);
 				const next = idx >= 0
-					? accounts.map((a, i) => i === idx ? { ...account, active: a.active } : a)
+					? accounts.map((a, i) => (i === idx ? { ...account, active: a.active } : a))
 					: [...accounts, account];
 				scheduleSave(next);
 				return next;
@@ -57,15 +60,13 @@ function createAccountsStore() {
 				return next;
 			});
 		},
-		/** Persist immediately (e.g., on page unload). */
 		flush() {
 			if (saveTimer) {
 				clearTimeout(saveTimer);
 				saveTimer = null;
-				// Get current value and save
 				let current: TumblrAccount[] = [];
 				subscribe((v) => (current = v))();
-				saveCachedAccounts(current);
+				void saveAllAccounts(current);
 			}
 		}
 	};
@@ -73,7 +74,6 @@ function createAccountsStore() {
 
 export const accounts = createAccountsStore();
 
-// Flush on page hide/unload
 if (browser) {
 	const flush = () => accounts.flush();
 	addEventListener('pagehide', flush);

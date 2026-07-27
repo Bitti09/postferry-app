@@ -69,7 +69,10 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 	const userInfoData = await client.userInfo();
 	const blogName = userInfoData.user.name;
 
-	// Render an HTML page that saves the tokens to localStorage and redirects to /
+	// Hand off to the SPA via sessionStorage. The layout's pending-OAuth
+	// effect (see src/routes/+layout.svelte) reads this, persists via the
+	// shared $lib/db/accounts.ts → openAppDB() v2 path, then clears the key.
+	// This keeps the schema in one place — no inline IDB script here.
 	const html = `
 		<!DOCTYPE html>
 		<html>
@@ -78,50 +81,18 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		</head>
 		<body>
 			<script>
-				const newAccount = {
+				const pending = {
 					blogName: ${JSON.stringify(blogName)},
 					token: ${JSON.stringify(access_token)},
 					secret: ${JSON.stringify(access_token_secret)},
 					active: true
 				};
-				
-				async function saveAccount() {
-					let idbFactory = window.indexedDB;
-					if ('storageBuckets' in navigator) {
-						const nav = navigator;
-						const bucket = await nav.storageBuckets.open('tumblr-app-state', { persisted: true, durability: 'strict' });
-						idbFactory = bucket.indexedDB;
-					}
-					
-					const req = idbFactory.open('keyval-store', 1);
-					req.onupgradeneeded = () => req.result.createObjectStore('keyval');
-					req.onsuccess = () => {
-						const db = req.result;
-						const tx = db.transaction('keyval', 'readwrite');
-						const store = tx.objectStore('keyval');
-						const getReq = store.get('tumblr_cached_accounts');
-						
-						getReq.onsuccess = () => {
-							const accounts = getReq.result || [];
-							const existingIndex = accounts.findIndex(a => a.blogName === newAccount.blogName);
-							if (existingIndex >= 0) {
-								accounts[existingIndex] = { ...newAccount, active: accounts[existingIndex].active };
-							} else {
-								accounts.push(newAccount);
-							}
-							store.put(accounts, 'tumblr_cached_accounts');
-						};
-						
-						tx.oncomplete = () => {
-							window.location.href = '/';
-						};
-					};
-					req.onerror = () => {
-						console.error('Failed to save account');
-						window.location.href = '/';
-					};
+				try {
+					sessionStorage.setItem('pending_oauth_account', JSON.stringify(pending));
+				} catch (e) {
+					console.error('Failed to stash pending OAuth account', e);
 				}
-				saveAccount();
+				window.location.replace('/accounts?pending=1');
 			</script>
 		</body>
 		</html>

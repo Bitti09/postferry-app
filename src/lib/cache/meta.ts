@@ -1,23 +1,20 @@
-// ─── Meta + Avatars + Accounts + Settings + Followed blogs + Blog infos ───
-// Thin wrappers over `idbGet`/`idbPut` for the JSON-shaped stores. All
-// values are stored as plain JS objects — no string envelopes.
-
 import { browser } from '$app/environment';
-import { STORES, idbGet, idbPut, idbDelete, idbWalk, idbTx, openCacheDB } from './db';
+import { db } from './newDb';
 import type { TumblrAccount, TumblrUser, TumblrBlog } from '$lib/types';
+import type { CachedAccountInfo, CachedBlogInfo, CachedFollowedList } from './newDb';
 
 export async function getMeta<T>(key: string): Promise<T | undefined> {
 	if (!browser) return undefined;
-	return idbGet<T>(STORES.meta, key);
+	const res = await db.meta.get(key);
+	return res?.value as T | undefined;
 }
+
 export async function setMeta<T>(key: string, value: T): Promise<void> {
 	if (!browser) return;
-	await idbPut(STORES.meta, key, value);
+	await db.meta.put({ key, value });
 }
 
 // ─── Avatars ────────────────────────────────────────────────────────────────
-// Keyed by `${blog}_${size}`.
-
 const FALLBACK_AVATAR =
 	'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%234b5563"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
 
@@ -35,23 +32,31 @@ function avatarKey(blogName: string, size: number): string {
 async function findBestAvatar(blogName: string): Promise<{ key: string; size: number } | null> {
 	let best: { key: string; size: number } | null = null;
 	const prefix = `${blogName}_`;
-	await idbWalk<Blob>(STORES.avatars, (_value, key) => {
-		const keyStr = String(key);
-		if (!keyStr.startsWith(prefix)) return;
-		const s = parseInt(keyStr.substring(prefix.length), 10);
+	await db.avatars.each((avatar) => {
+		if (!avatar.id.startsWith(prefix)) return;
+		const s = parseInt(avatar.id.substring(prefix.length), 10);
 		if (!Number.isFinite(s)) return;
-		if (!best || s > best.size) best = { key: keyStr, size: s };
+		if (!best || s > best.size) best = { key: avatar.id, size: s };
 	});
 	return best;
 }
 
 export async function getCachedAvatar(blogName: string, size: number = 512): Promise<string> {
 	if (!browser) return FALLBACK_AVATAR;
+	let best: { key: string; size: number } | null = null;
 	try {
-		const best = await findBestAvatar(blogName);
+		best = await findBestAvatar(blogName);
 		if (best && best.size >= size) {
-			const blob = await idbGet<Blob>(STORES.avatars, best.key);
-			if (blob) return avatarMemoryCache.get(best.key)?.objectUrl ?? URL.createObjectURL(blob);
+			const entry = await db.avatars.get(best.key);
+			if (entry?.blob) return avatarMemoryCache.get(best.key)?.objectUrl ?? URL.createObjectURL(entry.blob);
+		}
+
+		if (!navigator.onLine) {
+			if (best) {
+				const entry = await db.avatars.get(best.key);
+				if (entry?.blob) return URL.createObjectURL(entry.blob);
+			}
+			return FALLBACK_AVATAR;
 		}
 
 		await new Promise((r) => setTimeout(r, Math.random() * 400));
@@ -60,21 +65,26 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 		if (response.status === 429) {
 			console.warn(`[Rate Limit] Avatar fetch for ${blogName} hit 429. Using fallback.`);
 			if (best) {
-				const blob = await idbGet<Blob>(STORES.avatars, best.key);
-				if (blob) return URL.createObjectURL(blob);
+				const entry = await db.avatars.get(best.key);
+				if (entry?.blob) return URL.createObjectURL(entry.blob);
 			}
 			return FALLBACK_AVATAR;
 		}
 		if (!response.ok) throw new Error(`Avatar fetch failed with status ${response.status}`);
 
 		const blob = await response.blob();
-		await idbPut(STORES.avatars, avatarKey(blogName, size), blob);
+		await db.avatars.put({ id: avatarKey(blogName, size), blob });
 		if (best && best.key !== avatarKey(blogName, size)) {
-			await idbDelete(STORES.avatars, best.key);
+			await db.avatars.delete(best.key);
 		}
 		return URL.createObjectURL(blob);
 	} catch (e) {
-		console.error(`Failed to cache avatar for ${blogName}`, e);
+		if (best) {
+			try {
+				const entry = await db.avatars.get(best.key);
+				if (entry?.blob) return URL.createObjectURL(entry.blob);
+			} catch {}
+		}
 		return FALLBACK_AVATAR;
 	}
 }
@@ -94,64 +104,45 @@ function isValidAccount(item: unknown): item is TumblrAccount {
 
 export async function loadAllAccounts(): Promise<TumblrAccount[]> {
 	if (!browser) return [];
-	const out: TumblrAccount[] = [];
-	await idbWalk<TumblrAccount>(STORES.accounts, (value) => {
-		if (isValidAccount(value)) out.push(value);
-	});
-	return out;
+	return await db.accounts.toArray();
 }
 
 export async function saveAccount(account: TumblrAccount): Promise<void> {
 	if (!browser) return;
-	await idbPut(STORES.accounts, account.blogName, account);
+	await db.accounts.put(account);
 }
 
 export async function deleteAccount(blogName: string): Promise<void> {
 	if (!browser) return;
-	await idbDelete(STORES.accounts, blogName);
+	await db.accounts.delete(blogName);
 }
 
-/** Single-tx: put every account, delete any removed keys. No clear-then-put race. */
 export async function saveAllAccounts(accounts: TumblrAccount[]): Promise<void> {
 	if (!browser) return;
-	const db = await openCacheDB();
-	const existingKeys = await new Promise<IDBValidKey[]>((resolve, reject) => {
-		const tx = db.transaction(STORES.accounts, 'readonly');
-		const req = tx.objectStore(STORES.accounts).getAllKeys();
-		req.onsuccess = () => resolve(req.result ?? []);
-		tx.onerror = () => reject(tx.error ?? new Error('saveAllAccounts keys failed'));
+	await db.transaction('rw', db.accounts, async () => {
+		const keepKeys = new Set(accounts.map((a) => a.blogName));
+		const existingKeys = await db.accounts.toCollection().primaryKeys();
+		const toDelete = existingKeys.filter(k => !keepKeys.has(k));
+		await db.accounts.bulkDelete(toDelete);
+		await db.accounts.bulkPut(accounts);
 	});
-	const keepKeys = new Set(accounts.map((a) => a.blogName));
-	const ops: Array<
-		| { store: typeof STORES.accounts; op: 'put'; key: IDBValidKey; value: TumblrAccount }
-		| { store: typeof STORES.accounts; op: 'delete'; key: IDBValidKey }
-	> = [];
-	for (const a of accounts) ops.push({ store: STORES.accounts, op: 'put', key: a.blogName, value: a });
-	for (const k of existingKeys) {
-		if (!keepKeys.has(String(k))) ops.push({ store: STORES.accounts, op: 'delete', key: k });
-	}
-	await idbTx(ops);
 }
 
 // ─── Account Infos (user objects) ───────────────────────────────────────────
 
-interface CachedAccountInfo {
-	user: TumblrUser;
-	cachedAt: number;
-}
-
 export async function loadAllAccountInfos(): Promise<Record<string, TumblrUser>> {
 	if (!browser) return {};
 	const out: Record<string, TumblrUser> = {};
-	await idbWalk<CachedAccountInfo>(STORES.accountInfos, (value, key) => {
-		if (value?.user) out[String(key)] = value.user;
+	await db.accountInfos.each((value) => {
+		if (value?.user) out[value.blogName] = value.user;
 	});
 	return out;
 }
 
 export async function setAccountInfo(blogName: string, user: TumblrUser): Promise<void> {
 	if (!browser) return;
-	await idbPut<CachedAccountInfo>(STORES.accountInfos, blogName, {
+	await db.accountInfos.put({
+		blogName,
 		user,
 		cachedAt: Date.now()
 	});
@@ -159,40 +150,22 @@ export async function setAccountInfo(blogName: string, user: TumblrUser): Promis
 
 // ─── Blog Infos ─────────────────────────────────────────────────────────────
 
-export interface CachedBlogInfo {
-	share_likes: boolean;
-	likes?: number;
-	updated?: number;
-	full?: TumblrBlog;
-	cachedAt: number;
-}
-
 export async function getCachedBlogInfo(blogName: string): Promise<CachedBlogInfo | null> {
 	if (!browser) return null;
-	const v = await idbGet<CachedBlogInfo>(STORES.blogInfos, blogName);
+	const v = await db.blogInfos.get(blogName);
 	return v ?? null;
 }
 
 export async function setCachedBlogInfo(blogName: string, info: CachedBlogInfo): Promise<void> {
 	if (!browser) return;
-	await idbPut(STORES.blogInfos, blogName, info);
+	await db.blogInfos.put({ ...info, blogName });
 }
 
 // ─── Followed Blogs ─────────────────────────────────────────────────────────
 
-export interface CachedFollowedList {
-	accountBlogName: string;
-	blogs: TumblrBlog[];
-	cachedAt: number;
-}
-
 export async function loadAllFollowedBlogLists(): Promise<CachedFollowedList[]> {
 	if (!browser) return [];
-	const out: CachedFollowedList[] = [];
-	await idbWalk<CachedFollowedList>(STORES.followedBlogs, (value) => {
-		if (value) out.push(value);
-	});
-	return out;
+	return await db.followedBlogs.toArray();
 }
 
 export async function saveFollowedBlogsForAccount(
@@ -200,7 +173,7 @@ export async function saveFollowedBlogsForAccount(
 	blogs: TumblrBlog[]
 ): Promise<void> {
 	if (!browser) return;
-	await idbPut<CachedFollowedList>(STORES.followedBlogs, accountBlogName, {
+	await db.followedBlogs.put({
 		accountBlogName,
 		blogs,
 		cachedAt: Date.now()
@@ -241,15 +214,14 @@ const SETTINGS_KEY = 'app';
 
 export async function loadSettings(): Promise<Settings> {
 	if (!browser) return { ...DEFAULT_SETTINGS };
-	const v = await idbGet<Settings>(STORES.settings, SETTINGS_KEY);
-	if (v && typeof v === 'object') return { ...DEFAULT_SETTINGS, ...v };
+	const v = await db.settings.get(SETTINGS_KEY);
+	if (v && v.value && typeof v.value === 'object') return { ...DEFAULT_SETTINGS, ...v.value };
 	return { ...DEFAULT_SETTINGS };
 }
 
 export async function saveSettings(value: Settings): Promise<void> {
 	if (!browser) return;
-	await idbPut(STORES.settings, SETTINGS_KEY, value);
+	await db.settings.put({ key: SETTINGS_KEY, value });
 }
 
-export { STORES } from './db';
 export { clearCache, clearMediaCache } from './clear';

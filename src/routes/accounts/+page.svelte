@@ -1,22 +1,22 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { accounts } from '$lib/stores/accounts';
-	import { Heart, User, RefreshCw, CheckCircle2, Circle, Download, Loader2 } from 'lucide-svelte';
-	import { downloadAndCacheMedia, bulkIsMediaCached, addPostsToCache } from '$lib/stores/db';
+	import { Heart, User, RefreshCw, CheckCircle2, Circle, Download, Loader2 } from '@lucide/svelte';
+	import { bulkIsMediaCached, loadAllAccountInfos, setAccountInfo } from '$lib/cache';
+	import { bulkSetPosts } from '$lib/cache/posts';
+	import { requestMediaDownload } from '$lib/stores/downloads';
 	import { getAllMediaUrls } from '$lib/mediaUrls';
-	import type { TumblrAccount, TumblrPost } from '$lib/types';
+	import type { TumblrAccount, TumblrPost, TumblrUser } from '$lib/types';
 
-	let accountInfos = $state<Record<string, any>>({});
+	let accountInfos = $state<Record<string, TumblrUser>>({});
 	let loading = $state(false);
 	let error = $state('');
 	let isOffline = $state(false);
 	let downloadingFavs = $state<Record<string, { fetchedPosts: number, newMedia: number, skippedMedia: number, active: boolean }>>({});
 
 	async function fetchAccountInfos() {
-		if (typeof localStorage !== 'undefined') {
-			const cached = localStorage.getItem('tumblr_account_infos');
-			if (cached) accountInfos = JSON.parse(cached);
-		}
+		const cached = await loadAllAccountInfos();
+		if (Object.keys(cached).length > 0) accountInfos = cached;
 
 		if (typeof navigator !== 'undefined' && !navigator.onLine) {
 			return; // Don't attempt to fetch if offline
@@ -33,14 +33,12 @@
 				});
 				if (res.ok) {
 					const payload = await res.json();
-					const info = payload.user || payload;
+					const info: TumblrUser = payload.user || payload;
 					accountInfos[acc.blogName] = info;
+					await setAccountInfo(acc.blogName, info);
 				}
 			});
 			await Promise.all(promises);
-			if (typeof localStorage !== 'undefined') {
-				localStorage.setItem('tumblr_account_infos', JSON.stringify(accountInfos));
-			}
 		} catch (err: any) {
 			error = 'Failed to fetch some account information.';
 			console.error(err);
@@ -79,31 +77,31 @@
 				if (!posts || posts.length === 0) break; // Reached the end!
 
 				// Cache the raw post metadata directly into IndexedDB (supports text-only posts!)
-				await addPostsToCache(posts);
+				const likeUpdates = Object.fromEntries(posts.map((p: any) => [p.id, { [account.blogName]: true }]));
+				await bulkSetPosts(posts, { likedBy: likeUpdates });
+				
+				const { refreshUnreferencedPosts } = await import('$lib/stores/unreferencedPosts');
+				void refreshUnreferencedPosts();
 
-				// Extract and download media for this batch
-				const urlMeta = new Map<string, { timestamp: number, post: TumblrPost }>();
-				for (const post of posts) {
-					const meta = { timestamp: post.timestamp, post: post };
-					for (const u of getAllMediaUrls(post)) {
-						if (!urlMeta.has(u)) urlMeta.set(u, meta);
-					}
+			// Extract and download media for this batch
+			const urlMeta = new Map<string, { postId: number, blogName: string, timestamp: number; post: any }>();
+			for (const post of posts) {
+				const meta = { postId: post.id, blogName: post.blog_name, timestamp: post.timestamp, post };
+				for (const u of getAllMediaUrls(post)) {
+					if (!urlMeta.has(u)) urlMeta.set(u, meta);
 				}
+			}
 
 				const entries = Array.from(urlMeta.entries());
 				const cachedSet = await bulkIsMediaCached(entries.map(([url]) => url));
 
-				// Batch downloads with concurrency cap (reuse cacheAllVisible's approach)
+				// Batch downloads (fire and forget to Service Worker)
 				const toDownload = entries.filter(([url]) => !cachedSet.has(url));
-				const BATCH = 4;
-				for (let i = 0; i < toDownload.length; i += BATCH) {
-					const batch = toDownload.slice(i, i + BATCH);
-					await Promise.all(batch.map(async ([url, meta]) => {
-						await downloadAndCacheMedia(url, meta);
-						if (downloadingFavs[account.blogName]) {
-							downloadingFavs[account.blogName].newMedia++;
-						}
-					}));
+				for (const [url, meta] of toDownload) {
+					requestMediaDownload(url, meta);
+					if (downloadingFavs[account.blogName]) {
+						downloadingFavs[account.blogName].newMedia++;
+					}
 				}
 
 				// Count skipped
@@ -196,12 +194,17 @@
 										{/if}
 									</div>
 								</div>
-								<div>
-									<h2 class="card-title text-white text-xl font-bold">{account.blogName}</h2>
-									<p class="text-xs text-gray-500 font-mono uppercase tracking-widest mt-1">
-										{info?.name || 'Loading...'}
+							<div class="min-w-0">
+								<h2 class="card-title text-white text-xl font-bold">{account.blogName}</h2>
+								<p class="text-xs text-gray-500 font-mono uppercase tracking-widest mt-1 truncate">
+									{info?.name || 'Loading...'}
+								</p>
+								{#if info?.email}
+									<p class="text-[11px] text-gray-400 font-mono mt-0.5 truncate" title={info.email}>
+										{info.email}
 									</p>
-								</div>
+								{/if}
+							</div>
 							</div>
 							<button 
 								class="btn btn-ghost btn-circle btn-sm {account.active ? 'text-green-500' : 'text-gray-600'}"

@@ -1,75 +1,68 @@
-import { downloadAndCacheMedia, bulkIsMediaCached } from '$lib/stores/mediaCache';
+// ─── cacheUtils ─────────────────────────────────────────────────────────────
+// Bulk cache orchestrator. Used by Dashboard / Likes / Search / Blog pages
+// when the user clicks "Cache Visible". Streams post → URL mapping through
+// `bulkIsMediaCached` for the existence check, then `bulkCacheMedia` for the
+// downloads (single-tx per batch, BATCH=6 in-flight fetches).
+
+import { bulkIsMediaCached, type SlimMediaMeta } from '$lib/cache/blobs';
+import { requestMediaDownload } from '$lib/stores/downloads';
 import { getAllMediaUrls } from '$lib/mediaUrls';
 import type { TumblrPost } from '$lib/types';
 
-export interface CacheProgress {
-	done: number;
-	total: number;
-}
-
-interface UrlMeta {
-	timestamp: number;
-	post: TumblrPost;
-}
+export interface CacheProgress { done: number; total: number }
 
 /**
- * Download all media URLs from a list of posts, skipping already-cached items.
- * Call onProgress to update UI with download progress.
+ * Download all media URLs from a list of posts, skipping already-cached
+ * items. Atomically writes the post metadata alongside each blob so the
+ * offline post-detail view can find its media without re-extracting URLs.
  */
 export async function cacheAllVisible(
 	posts: TumblrPost[],
 	onProgress?: (progress: CacheProgress) => void
 ): Promise<void> {
-	// Collect unique URLs with their metadata (first post wins for tie-breaking)
-	const urlMeta = new Map<string, UrlMeta>();
+	if (posts.length === 0) {
+		onProgress?.({ done: 0, total: 0 });
+		return;
+	}
+
+	const urlMeta = new Map<string, SlimMediaMeta>();
 	for (const post of posts) {
-		const meta: UrlMeta = { timestamp: post.timestamp, post };
+		const meta: SlimMediaMeta = {
+			postId: post.id,
+			blogName: post.blog_name,
+			timestamp: post.timestamp,
+			post,
+			postMeta: {
+				id: post.id,
+				blogName: post.blog_name,
+				timestamp: post.timestamp,
+				summary: post.summary ?? '',
+				type: post.type,
+				tags: post.tags ?? []
+			}
+		};
 		for (const url of getAllMediaUrls(post)) {
 			if (!urlMeta.has(url)) urlMeta.set(url, meta);
 		}
 	}
 
 	const urls = [...urlMeta.keys()];
-	if (!urls.length) {
+	if (urls.length === 0) {
 		onProgress?.({ done: 0, total: 0 });
 		return;
 	}
 
-	// Check which URLs are already cached
 	const cachedSet = await bulkIsMediaCached(urls);
 	const toDownload = urls.filter((u) => !cachedSet.has(u));
-
-	if (!toDownload.length) {
+	if (toDownload.length === 0) {
 		onProgress?.({ done: 0, total: 0 });
 		return;
 	}
 
-	// Download in controlled batches with progress throttling
-	const BATCH_SIZE = 4;
-	const PROGRESS_THROTTLE_MS = 50;
-	let done = 0;
-	let lastProgressTime = 0;
-
-	const reportProgress = (force = false) => {
-		const now = Date.now();
-		if (force || now - lastProgressTime >= PROGRESS_THROTTLE_MS) {
-			onProgress?.({ done, total: toDownload.length });
-			lastProgressTime = now;
-		}
-	};
-
-	reportProgress();
-
-	for (let i = 0; i < toDownload.length; i += BATCH_SIZE) {
-		const batch = toDownload.slice(i, i + BATCH_SIZE);
-		await Promise.all(
-			batch.map(async (url) => {
-				await downloadAndCacheMedia(url, urlMeta.get(url));
-				done++;
-				reportProgress();
-			})
-		);
+	const items = toDownload.map((url) => ({ url, meta: urlMeta.get(url)! }));
+	for (const item of items) {
+		requestMediaDownload(item.url, item.meta);
 	}
 
-	reportProgress(true); // Final progress update
+	onProgress?.({ done: toDownload.length, total: toDownload.length });
 }

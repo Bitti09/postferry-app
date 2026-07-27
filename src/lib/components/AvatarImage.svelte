@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { settings } from "$lib/stores/settings";
-	import { getCachedAvatar } from "$lib/stores/db";
+	import { getCachedAvatar } from '$lib/cache';
 
 	let { blogName, size = 64, class: className = '' } = $props<{
 		blogName: string;

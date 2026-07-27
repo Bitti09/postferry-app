@@ -6,11 +6,11 @@
 	import NPFRenderer from "$lib/components/NPFRenderer.svelte";
 	import AvatarImage from "$lib/components/AvatarImage.svelte";
 	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize, WifiOff } from "@lucide/svelte";
-	import { bulkSetPosts, getCachedPostById, mergeNotes } from "$lib/stores/postCache";
-	import { getMediaForPost, type MediaRef } from "$lib/stores/mediaCache";
+	import { bulkSetPosts, getCachedPostById, mergeNotes } from '$lib/cache/posts';
+	import { getMediaForPost, type MediaRef } from '$lib/cache/blobs';
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
 
-	let { data } = $props();
+	let { data }: { data: { blogName: string; postId: string } } = $props();
 	let blogName = $derived(data.blogName);
 	let postId = $derived(data.postId);
 
@@ -492,11 +492,13 @@ async function loadOfflinePost() {
 
 <svelte:head>
 	<style>
-		body { overflow: hidden !important; }
+		@media (min-width: 1280px) {
+			body { overflow: hidden !important; }
+		}
 	</style>
 </svelte:head>
 
-<div class="flex flex-col bg-black" style="height: calc(100vh - 64px); overflow: hidden;">
+<div class="flex flex-col bg-black min-h-screen xl:h-[calc(100vh-64px)] xl:overflow-hidden">
 	<!-- Global Navigation -->
 	<div class="sticky top-0 z-50 bg-black/80 backdrop-blur-md border-b border-gray-800 px-4 py-3 flex items-center justify-between">
 		<button onclick={() => history.back()} class="btn btn-ghost btn-sm gap-2 text-white hover:bg-gray-800">
@@ -512,28 +514,28 @@ async function loadOfflinePost() {
 
 		<div class="flex items-center gap-2">
 			{#if dev && post}
-				<button class="btn btn-xs btn-outline btn-warning border-dashed uppercase tracking-widest text-[9px] font-black mr-2" onclick={() => showDebug = true}>
+				<button class="btn btn-xs btn-outline btn-warning border-dashed uppercase tracking-widest text-[9px] font-black mr-2 hidden sm:flex" onclick={() => showDebug = true}>
 					Debug API
 				</button>
 			{/if}
-			<span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Viewing Post</span>
+			<span class="hidden sm:inline text-xs font-bold text-gray-500 uppercase tracking-widest">Viewing Post</span>
 			<span class="text-xs font-black text-white px-2 py-1 bg-gray-800 rounded-lg">{postId}</span>
 			{#if post?.type}
-				<span class="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-primary/30 text-primary bg-primary/10">
+				<span class="hidden sm:inline text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-primary/30 text-primary bg-primary/10">
 					{post.type}
 				</span>
 			{/if}
 			{#if isOfflinePost}
 				<span
 					title="Loaded from your local media cache — live notes disabled"
-					class="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-amber-500/40 text-amber-400 bg-amber-500/10"
+					class="hidden sm:flex items-center gap-1 text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-amber-500/40 text-amber-400 bg-amber-500/10"
 				>
-					<WifiOff size={12} /> Offline Cache
+					<WifiOff size={12} /> Offline
 				</span>
 				{#if post}
 					<a
 						href={`/post/${post.blog_name}/${post.id}`}
-						class="text-[10px] font-bold text-primary hover:underline uppercase tracking-widest"
+						class="hidden sm:inline text-[10px] font-bold text-primary hover:underline uppercase tracking-widest"
 					>Load live</a>
 				{/if}
 			{/if}
@@ -551,10 +553,10 @@ async function loadOfflinePost() {
 			</div>
 		</div>
 	{:else if post}
-		<div class="flex-1 grid grid-cols-1 xl:grid-cols-[350px_1fr_400px] overflow-hidden">
+		<div class="flex-1 grid grid-cols-1 xl:grid-cols-[350px_1fr_400px] xl:overflow-hidden">
 			
 			<!-- LEFT COLUMN: Account & Primary Actions -->
-			<aside class="bg-gray-900 border-r border-gray-800 flex flex-col h-full overflow-y-auto custom-scrollbar">
+			<aside class="bg-gray-900 xl:border-r border-gray-800 flex flex-col h-auto xl:h-full xl:overflow-y-auto custom-scrollbar order-2 xl:order-1">
 				<div class="p-8">
 					<!-- Author Card -->
 					<div class="bg-black/40 rounded-3xl p-6 border border-gray-800 mb-8 shadow-inner">
@@ -715,7 +717,7 @@ async function loadOfflinePost() {
 			</aside>
 
 			<!-- MIDDLE COLUMN: Content Stage -->
-			<main class="h-full bg-black flex flex-col overflow-y-auto custom-scrollbar">
+			<main class="h-auto xl:h-full bg-black flex flex-col xl:overflow-y-auto custom-scrollbar order-1 xl:order-2">
 				<div class="w-full flex flex-col pb-8">
 					{#if fromName}
 						<div class="flex items-center gap-2 px-6 py-4 bg-gray-900 border-b border-gray-800 text-gray-400 text-sm">
@@ -764,7 +766,7 @@ async function loadOfflinePost() {
 			</main>
 
 			<!-- RIGHT COLUMN: Trail, Reblogs, Notes, Comments Tabs -->
-			<aside class="bg-gray-900 border-l border-gray-800 flex flex-col h-full overflow-hidden">
+			<aside class="bg-gray-900 xl:border-l border-gray-800 flex flex-col h-auto xl:h-full xl:overflow-hidden order-3">
 				<!-- Detailed Tab Switcher -->
 				<div class="grid grid-cols-4 bg-black/40 border-b border-gray-800">
 					<button 
@@ -801,7 +803,7 @@ async function loadOfflinePost() {
 					</button>
 				</div>
 
-				<div class="flex-1 overflow-y-auto custom-scrollbar p-6">
+				<div class="xl:flex-1 xl:overflow-y-auto custom-scrollbar p-6">
 					{#if activeTab === 'trail'}
 						<!-- Full NPF trail with real content rendering -->
 						{#if post.trail && post.trail.length > 0}

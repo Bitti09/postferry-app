@@ -3,27 +3,27 @@
 	import { browser } from '$app/environment';
 	import { settings } from '$lib/stores/settings';
 	import { accounts, accountsReady } from '$lib/stores/accounts';
-	import { addPostsToCache, bulkIsMediaCached } from '$lib/stores/db';
+	import { bulkIsMediaCached, bulkSetPosts } from '$lib/cache';
+	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
 	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import PostCard from '$lib/components/PostCard.svelte';
-	import LazyRender from '$lib/components/LazyRender.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
 	import type { TumblrPost, TumblrAccount } from '$lib/types';
-	import { Plus, User, LogOut, Download, Loader2, Play, Home, Heart } from 'lucide-svelte';
+	import { Plus, User, LogOut, Download, Loader2, Play, Home, Heart, Layers, Image as ImageIcon, Video, Music, Quote, Link as LinkIcon, MessageSquare, HelpCircle, FileText } from '@lucide/svelte';
 
-	const FILTERS: { value: PostFilter; label: string }[] = [
-		{ value: 'all', label: 'All' },
-		{ value: 'photo', label: 'Photos' },
-		{ value: 'video', label: 'Videos' },
-		{ value: 'audio', label: 'Audio' },
-		{ value: 'quote', label: 'Quotes' },
-		{ value: 'link', label: 'Links' },
-		{ value: 'chat', label: 'Chat' },
-		{ value: 'answer', label: 'Asks' },
-		{ value: 'text', label: 'Text' }
+	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
+		{ value: 'all', label: 'All', icon: Layers },
+		{ value: 'photo', label: 'Photos', icon: ImageIcon },
+		{ value: 'video', label: 'Videos', icon: Video },
+		{ value: 'audio', label: 'Audio', icon: Music },
+		{ value: 'quote', label: 'Quotes', icon: Quote },
+		{ value: 'link', label: 'Links', icon: LinkIcon },
+		{ value: 'chat', label: 'Chat', icon: MessageSquare },
+		{ value: 'answer', label: 'Asks', icon: HelpCircle },
+		{ value: 'text', label: 'Text', icon: FileText }
 	];
 
 	let posts: TumblrPost[] = $state([]);
@@ -37,6 +37,7 @@
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
 	let slideshowStartPostId = $state<string | number | null>(null);
+	let slideshowStartMediaUrl = $state<string | null>(null);
 	let gridContainer = $state<HTMLElement | null>(null);
 
 	const GRID_GAP_PX = 16;
@@ -54,7 +55,8 @@
 		if (width >= 1024) return 5;
 		if (width >= 768) return 4;
 		if (width >= 640) return 3;
-		return 2;
+		if (width >= 480) return 2;
+		return 1;
 	}
 
 	let columnCount = $derived.by(() => {
@@ -175,8 +177,9 @@
 		downloadingAll = false;
 	}
 
-	function openSlideshowFromPost(post: TumblrPost, _mediaUrl?: string) {
+	function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
+		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
@@ -246,7 +249,8 @@
 				} else {
 					posts = [...posts, ...uniqueNewPosts];
 					accountOffsets = { ...accountOffsets, ...newOffsets };
-					addPostsToCache(uniqueNewPosts);
+					bulkSetPosts(uniqueNewPosts)
+						.then(() => refreshUnreferencedPosts());
 				}
 			}
 		} catch (err: any) {
@@ -392,28 +396,31 @@
 			</div>
 
 			{#if activeAccounts.length > 0}
-				<div class="flex items-center gap-4">
-					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap">
+				<div class="flex flex-col sm:flex-row items-end sm:items-center gap-4 w-full max-w-full">
+					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto w-full sm:w-auto max-w-full hide-scrollbar justify-start">
 						{#each FILTERS as f}
+							{@const Icon = f.icon}
 							<button
-								class="tab {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+								class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 								onclick={() => { currentFilter = f.value; loadPosts(true); }}
+								title={f.label}
 							>
-								{f.label}
+								<Icon size={14} />
+								<span class="hidden sm:inline">{f.label}</span>
 							</button>
 						{/each}
 					</div>
 
-					<div class="flex items-center gap-2">
-						<button 
-							class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-							onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+					<div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+						<button
+							class="btn btn-sm btn-outline gap-1 border-gray-600 hover:bg-gray-800 text-gray-300 flex-1 sm:flex-none"
+							onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
 							disabled={filteredPosts.length === 0}
 						>
-							<Play size={16} /> Play Slideshow
+							<Play size={16} /> <span class="hidden sm:inline">Play Slideshow</span><span class="sm:hidden">Play</span>
 						</button>
 						<button 
-							class="btn btn-sm btn-primary gap-2"
+							class="btn btn-sm btn-primary gap-1 flex-1 sm:flex-none"
 							onclick={startCacheAll}
 							disabled={downloadingAll || isOffline}
 						>
@@ -421,7 +428,7 @@
 								<Loader2 size={16} class="animate-spin" />
 								{downloadProgress.done}/{downloadProgress.total}
 							{:else}
-								<Download size={16} /> Cache Visible
+								<Download size={16} /> <span class="hidden sm:inline">Cache Visible</span><span class="sm:hidden">Cache</span>
 							{/if}
 						</button>
 					</div>
@@ -474,9 +481,7 @@
 									>
 										{#each rowItem.posts as post (post.id)}
 											<div id={"post-" + post.id}>
-												<LazyRender>
-													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
-												</LazyRender>
+												<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
 											</div>
 										{/each}
 									</div>
@@ -496,10 +501,11 @@
 	{/if}
 </div>
 
-<Slideshow 
-	bind:active={slideshowActive} 
+<Slideshow
+	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
-	posts={filteredPosts} 
-	onReachEnd={async () => { await loadPosts(false); }} 
+	startMediaUrl={slideshowStartMediaUrl}
+	posts={filteredPosts}
+	onReachEnd={async () => { await loadPosts(false); }}
 />

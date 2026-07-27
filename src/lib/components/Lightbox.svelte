@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import CachedMedia from './CachedMedia.svelte';
 	
 	let { 
 		active = $bindable(false), 
@@ -84,13 +85,20 @@
 		
 		{#if displayIsVideo}
 			<div role="presentation" onclick={(e) => e.stopPropagation()}>
-				<video controls autoplay class="w-screen h-screen object-contain" src={displayUrl}>
-					<track kind="captions" />
-				</video>
+				<CachedMedia 
+					url={displayUrl} 
+					type="video/mp4" 
+					class="w-screen h-screen object-contain" 
+					autoplay={true} 
+				/>
 			</div>
 		{:else}
 			<div role="presentation" onclick={(e) => e.stopPropagation()}>
-				<img src={displayUrl} alt="Expanded Media" class="w-screen h-screen object-contain select-none" />
+				<CachedMedia 
+					url={displayUrl} 
+					type="image/jpeg" 
+					class="w-screen h-screen object-contain select-none" 
+				/>
 			</div>
 		{/if}
 	</div>

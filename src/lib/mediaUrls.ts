@@ -11,15 +11,31 @@ function pickBestMediaUrl(media?: MediaItem[] | MediaItem | null): string | null
 	const mediaArray = toMediaArray(media);
 	if (!mediaArray.length) return null;
 
-	let largest = mediaArray[0];
-	for (let i = 1; i < mediaArray.length; i++) {
-		const currentArea = (mediaArray[i].width || 0) * (mediaArray[i].height || 0);
-		const largestArea = (largest.width || 0) * (largest.height || 0);
-		if (currentArea > largestArea) {
-			largest = mediaArray[i];
+	// 1. Look for the guaranteed original
+	const original = mediaArray.find(m => m.has_original_dimensions && !m.cropped);
+	if (original) return original.url ?? null;
+
+	// 2. Filter out cropped thumbnails
+	let candidates = mediaArray.filter(m => !m.cropped);
+	if (!candidates.length) candidates = mediaArray; // fallback if everything is cropped
+
+	// 3. Evaluate based on explicit HD flag or largest area
+	let best = candidates[0];
+	for (let i = 1; i < candidates.length; i++) {
+		const m = candidates[i];
+		if (m.hd && !best.hd) {
+			best = m;
+			continue;
+		}
+		
+		const currentArea = (m.width || 0) * (m.height || 0);
+		const bestArea = (best.width || 0) * (best.height || 0);
+		if (currentArea > bestArea) {
+			best = m;
 		}
 	}
-	return largest.url ?? null;
+	
+	return best.url ?? null;
 }
 
 /** Type guard for image blocks */
@@ -43,6 +59,7 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 	const videos = new Set<string>();
 	const images = new Set<string>();
 	const posters = new Set<string>();
+	const filmstrips = new Set<string>();
 	let primary = '';
 
 	for (const block of blocks ?? []) {
@@ -54,8 +71,19 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 					if (!primary) primary = url;
 				}
 			} else if (isVideoBlock(block)) {
-				const vidUrl = pickBestMediaUrl(block.media) ?? block.url;
+				const isNative = !block.provider || block.provider === 'tumblr';
+				let vidUrl: string | null = null;
+				
+				if (isNative) {
+					// Native video: attempt to follow NPF waterfall for playable MP4s
+					vidUrl = pickBestMediaUrl(block.media) ?? 
+							 block.embed_url ?? 
+							 block.embed_iframe?.url ?? 
+							 block.url ?? null;
+				}
+				
 				const posterUrl = pickBestMediaUrl(block.poster) ?? block.thumbnail_url;
+				
 				if (vidUrl) {
 					urls.add(vidUrl);
 					videos.add(vidUrl);
@@ -65,6 +93,17 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 					posters.add(posterUrl);
 				}
 				if (!primary) primary = posterUrl ?? vidUrl ?? '';
+
+				// Extract filmstrip frames for video preview scrubbing
+				if (block.filmstrip) {
+					const stripArray = toMediaArray(block.filmstrip);
+					for (const frame of stripArray) {
+						if (frame.url) {
+							urls.add(frame.url);
+							filmstrips.add(frame.url);
+						}
+					}
+				}
 			} else if (isLinkBlock(block)) {
 				const posterUrl = pickBestMediaUrl(block.poster);
 				if (posterUrl) {
@@ -80,6 +119,7 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 		videos: [...videos],
 		images: [...images],
 		posters: [...posters],
+		filmstrips: [...filmstrips],
 		primary
 	};
 }
@@ -90,6 +130,7 @@ function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 	const images = new Set<string>();
 	const videos = new Set<string>();
 	const posters = new Set<string>();
+	const filmstrips = new Set<string>();
 	let primary = '';
 
 	if (post.type === 'photo' && post.photos) {
@@ -141,6 +182,7 @@ function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 		images: [...images],
 		videos: [...videos],
 		posters: [...posters],
+		filmstrips: [...filmstrips],
 		primary
 	};
 }
@@ -183,6 +225,7 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 			videos: [...new Set([...result.videos, ...trailResult.videos])],
 			images: [...new Set([...result.images, ...trailResult.images])],
 			posters: [...new Set([...result.posters, ...trailResult.posters])],
+			filmstrips: [...new Set([...result.filmstrips, ...trailResult.filmstrips])],
 			primary: result.primary || trailResult.primary
 		};
 	}
@@ -206,6 +249,7 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 		videos: result.videos.filter(Boolean),
 		images: result.images.filter(Boolean),
 		posters: result.posters.filter(Boolean),
+		filmstrips: result.filmstrips.filter(Boolean),
 		primary: preferredPrimary
 	};
 

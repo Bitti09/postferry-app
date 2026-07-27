@@ -1,48 +1,15 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
-	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from 'lucide-svelte';
+	import { untrack, onMount } from 'svelte';
+	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from '@lucide/svelte';
 	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls, getPosterUrls } from '$lib/mediaUrls';
 	import { settings } from '$lib/stores/settings';
-	import { downloadAndCacheMedia } from '$lib/stores/mediaCache';
+	import { requestMediaDownload } from '$lib/stores/downloads';
 	import CachedMedia from './CachedMedia.svelte';
 	import type { TumblrPost } from '$lib/types';
-
-	const AUTO_CACHE_MAX_ACTIVE = 3;
-	const AUTO_CACHE_DEBUG = false;
-	let activeAutoCacheJobs = 0;
-	const autoCacheWaiters: Array<() => void> = [];
-
-	async function acquireAutoCacheSlot(): Promise<void> {
-		if (activeAutoCacheJobs < AUTO_CACHE_MAX_ACTIVE) {
-			activeAutoCacheJobs += 1;
-			return;
-		}
-
-		await new Promise<void>((resolve) => {
-			autoCacheWaiters.push(resolve);
-		});
-		activeAutoCacheJobs += 1;
-	}
-
-	function releaseAutoCacheSlot() {
-		activeAutoCacheJobs = Math.max(0, activeAutoCacheJobs - 1);
-		const next = autoCacheWaiters.shift();
-		if (next) next();
-	}
-
-	function logAutoCache(message: string, extra?: Record<string, unknown>) {
-		if (!AUTO_CACHE_DEBUG) return;
-		console.debug('[AutoCache][PostCard]', message, {
-			postId: post?.id,
-			blogName: post?.blog_name,
-			...extra
-		});
-	}
 
 	let {
 		post,
 		mode = 'normal',
-		onclickOverride,
 		onMediaClick,
 		onCachedUrl,
 		autoCacheEnabled = true,
@@ -50,7 +17,6 @@
 	} = $props<{
 		post: TumblrPost;
 		mode?: 'normal' | 'cache';
-		onclickOverride?: () => void;
 		onMediaClick?: (post: TumblrPost, mediaUrl?: string) => void;
 		onCachedUrl?: (url: string) => void;
 		autoCacheEnabled?: boolean;
@@ -69,7 +35,8 @@
 		let posterUrl = '';
 
 		if (videos.length > 0) {
-			const thumb = images[0] || posters[0];
+			const isMultiMedia = videos.length + images.length > 1;
+			const thumb = isMultiMedia ? (posters[0] || images[0]) : (images[0] || posters[0]);
 			if (thumb) {
 				primary = thumb;
 				primaryType = 'image';
@@ -95,7 +62,6 @@
 	let mediaFailed = $state(false);
 
 	$effect(() => {
-		// Reset per card/post render cycle.
 		post.id;
 		mediaFailed = false;
 	});
@@ -108,8 +74,21 @@
 		cachedUrls = new Set(preCheckedUrls);
 	});
 
+	onMount(() => {
+		const onCached = (e: Event) => {
+			const { url } = (e as CustomEvent).detail;
+			if (mediaInfo.allUrls.includes(url)) {
+				const next = new Set(cachedUrls);
+				next.add(url);
+				cachedUrls = next;
+				onCachedUrl?.(url);
+			}
+		};
+		window.addEventListener('tmblr-media-cached', onCached);
+		return () => window.removeEventListener('tmblr-media-cached', onCached);
+	});
+
 	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedUrls.has(u)));
-	let isDownloading = $state(false);
 	let postDetailHref = $derived(`/post/${post.blog_name}/${post.id_string || post.id}`);
 	const DETAIL_ZONE_HEIGHT_PX = 132;
 
@@ -120,130 +99,61 @@
 	function handleMediaClick(e: MouseEvent) {
 		e.preventDefault();
 		e.stopPropagation();
-		if (mode === 'cache') {
-			onclickOverride?.();
-			return;
-		}
 		const targetMediaUrl = mediaInfo.isVideo
 			? (getVideoUrls(post)[0] || mediaInfo.primary)
 			: mediaInfo.primary;
+		
 		if (onMediaClick) {
 			onMediaClick(post, targetMediaUrl);
 			return;
 		}
-		openPostDetail();
+		if (mode !== 'cache') {
+			openPostDetail();
+		}
 	}
 
 	function handleTextClick(e: MouseEvent) {
+		if (mode === 'cache') return;
 		e.preventDefault();
 		e.stopPropagation();
-		if (mode === 'cache') {
-			onclickOverride?.();
-			return;
-		}
 		openPostDetail();
 	}
 
-	async function downloadPostMedia() {
-			if (isDownloading || isCached) return;
-			isDownloading = true;
-			logAutoCache('manual-cache-start', { totalUrls: mediaInfo.allUrls.length });
+	function downloadPostMedia() {
+		if (isCached) return;
 
-			if (mediaInfo.allUrls.length === 0) {
-				isDownloading = false;
-				return;
+		const postMeta = {
+			postId: post.id,
+			blogName: post.blog_name,
+			timestamp: post.timestamp,
+			post
+		};
+
+		mediaInfo.allUrls.forEach((url) => {
+			if (!cachedUrls.has(url)) {
+				requestMediaDownload(url, postMeta);
 			}
-
-			downloadAndCacheMedia && Promise.all(mediaInfo.allUrls.map(async (url: string) => {
-				const res = await downloadAndCacheMedia(url);
-				if (res?.url) {
-					const next = new Set(cachedUrls);
-					next.add(url);
-					cachedUrls = next;
-					onCachedUrl?.(url);
-					logAutoCache('manual-cache-success', { url });
-				} else {
-					logAutoCache('manual-cache-miss', { url });
-				}
-			}))
-				.then(() => {
-					isDownloading = false;
-					logAutoCache('manual-cache-done', { cachedCount: cachedUrls.size });
-				})
-				.catch((error) => {
-					isDownloading = false;
-					logAutoCache('manual-cache-error', { error: String(error) });
-				});
-		}
+		});
+	}
 
 	$effect(() => {
-		const autoCache = $settings.autoCacheMedia && autoCacheEnabled;
+		const autoCache = $settings.autoCacheMedia && autoCacheEnabled && mode !== 'cache';
 		const urls = mediaInfo.allUrls;
-		if (!autoCache || urls.length === 0) {
-			logAutoCache('auto-cache-skip', {
-				autoCacheSetting: $settings.autoCacheMedia,
-				autoCacheEnabled,
-				urlCount: urls.length
-			});
-			return;
-		}
+		if (!autoCache || urls.length === 0) return;
 
-		let cancelled = false;
-		logAutoCache('auto-cache-effect-start', {
-			urlCount: urls.length,
-			currentlyCached: cachedUrls.size,
-			activeJobs: activeAutoCacheJobs
-		});
+		const pending = untrack(() => urls.filter((url) => !cachedUrls.has(url)));
+		if (pending.length === 0) return;
 
-		(async () => {
-			let acquired = false;
-			try {
-				logAutoCache('auto-cache-await-slot', { activeJobs: activeAutoCacheJobs });
-				await acquireAutoCacheSlot();
-				acquired = true;
-				if (cancelled) return;
-				logAutoCache('auto-cache-slot-acquired', { activeJobs: activeAutoCacheJobs });
-
-				const pending = untrack(() => urls.filter((url) => !cachedUrls.has(url)));
-				if (pending.length === 0) {
-					logAutoCache('auto-cache-no-pending');
-					return;
-				}
-				logAutoCache('auto-cache-pending', { pendingCount: pending.length, pending });
-
-				isDownloading = true;
-
-				for (const url of pending) {
-					if (cancelled) continue;
-					logAutoCache('auto-cache-download-start', { url });
-					const res = await downloadAndCacheMedia(url);
-					if (cancelled) break;
-					if (res?.url) {
-						const next = new Set(cachedUrls);
-						next.add(url);
-						cachedUrls = next;
-						onCachedUrl?.(url);
-						logAutoCache('auto-cache-download-success', { url, cachedCount: cachedUrls.size });
-					} else {
-						logAutoCache('auto-cache-download-miss', { url });
-					}
-				}
-			} finally {
-				if (!cancelled && acquired) {
-					isDownloading = false;
-					logAutoCache('auto-cache-finished', { cachedCount: cachedUrls.size });
-				}
-				if (acquired) {
-					releaseAutoCacheSlot();
-					logAutoCache('auto-cache-slot-released', { activeJobs: activeAutoCacheJobs });
-				}
-			}
-		})();
-
-		return () => {
-			cancelled = true;
-			logAutoCache('auto-cache-cancelled');
+		const postMeta = {
+			postId: post.id,
+			blogName: post.blog_name,
+			timestamp: post.timestamp,
+			post
 		};
+
+		for (const url of pending) {
+			requestMediaDownload(url, postMeta);
+		}
 	});
 </script>
 
@@ -254,13 +164,16 @@
 	onkeydown={(e: KeyboardEvent) => {
 		if (mode === 'cache' && (e.key === 'Enter' || e.key === ' ')) {
 			e.preventDefault();
-			onclickOverride?.();
+			handleMediaClick(e as unknown as MouseEvent);
 		}
 	}}
 	onclick={(e: MouseEvent) => {
 		if (mode === 'cache') {
-			e.preventDefault();
-			onclickOverride?.();
+			const target = e.target as HTMLElement;
+			if (target.closest('.postcard-text-area')) {
+				return;
+			}
+			handleMediaClick(e);
 		}
 	}}
 	class="group relative block overflow-hidden rounded-xl bg-gray-900 aspect-3/4 shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl hover:shadow-cyan-900/20 {mode === 'cache' ? 'cursor-zoom-in text-left' : ''}"
@@ -268,13 +181,15 @@
 	{#if mediaInfo.primary && !mediaFailed}
 		{#if mediaInfo.isVideo}
 			{#if mediaInfo.previewUrl}
-				<img
-					src={mediaInfo.previewUrl}
+				<CachedMedia
+					url={mediaInfo.previewUrl}
+					type="image"
+					thumbnailMode={true}
+					autoCacheEnabled={autoCacheEnabled}
 					alt={post.summary || 'Tumblr Post video preview'}
 					class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-					loading="lazy"
-					decoding="async"
-					onerror={() => { mediaFailed = true; }}
+					onUnavailable={() => { mediaFailed = true; }}
+					post={post}
 				/>
 			{:else}
 				<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
@@ -291,6 +206,7 @@
 				alt={post.summary || 'Tumblr Post'}
 				class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
 				onUnavailable={() => { mediaFailed = true; }}
+				post={post}
 			/>
 		{/if}
 	{:else}
@@ -343,7 +259,7 @@
 
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<div
-		class="absolute bottom-0 left-0 right-0 p-4 z-30 {mode === 'normal' ? 'cursor-pointer' : ''}"
+		class="postcard-text-area absolute bottom-0 left-0 right-0 p-4 z-30 cursor-pointer"
 		style={mode === 'normal' ? `min-height: ${DETAIL_ZONE_HEIGHT_PX}px;` : undefined}
 		role={mode === 'normal' ? 'button' : undefined}
 		tabindex={mode === 'normal' ? 0 : undefined}
@@ -361,6 +277,7 @@
 		<span 
 			class="text-sm font-semibold text-white truncate hover:text-primary transition-colors block relative z-30 cursor-pointer"
 			onclick={(e) => {
+				if (mode === 'cache') return;
 				e.preventDefault();
 				e.stopPropagation();
 				window.location.href = `/blog/${post.blog_name}`;
@@ -369,13 +286,11 @@
 			{post.blog_name}
 		</span>
 		<p class="text-xs text-gray-300 line-clamp-2 mt-1">{post.summary}</p>
-		
-
 
 		<div class="mt-3 flex items-center justify-between gap-1 text-xs text-gray-400 relative z-30">
 			<span class="truncate">{post.note_count || 0} notes</span>
 			
-			{#if !$settings.autoCacheMedia && !isCached && !isDownloading && mediaInfo.allUrls.length > 0}
+			{#if !$settings.autoCacheMedia && !isCached && mediaInfo.allUrls.length > 0}
 				<button
 					class="flex items-center gap-1 hover:text-white transition-colors p-1 shrink-0 whitespace-nowrap"
 					onclick={(e) => { e.preventDefault(); e.stopPropagation(); downloadPostMedia(); }}
@@ -383,10 +298,6 @@
 				>
 					<Download size={12} /> <span class="font-bold">Save offline</span>
 				</button>
-			{:else if !$settings.autoCacheMedia && isDownloading}
-				<div class="flex items-center gap-1 p-1 text-primary shrink-0 whitespace-nowrap">
-					<Loader2 size={12} class="animate-spin" /> <span class="font-bold">Downloading</span>
-				</div>
 			{/if}
 		</div>
 	</div>

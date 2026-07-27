@@ -55,7 +55,7 @@
 	});
 </script>
 
-<div class="flex flex-col min-h-screen">
+<div class="flex flex-col min-h-screen pb-16 md:pb-0">
 	<Navbar />
 	<main class="flex-1">
 		{@render children()}

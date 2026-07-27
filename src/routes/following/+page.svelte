@@ -4,9 +4,11 @@
 	import { accounts } from '$lib/stores/accounts';
 	import AvatarImage from '$lib/components/AvatarImage.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import { getCachedBlogInfo, setCachedBlogInfo, getCachedFollowedBlogs, setCachedFollowedBlogs } from '$lib/stores/db';
-	import type { TumblrAccount } from '$lib/types';
+
+	import { getCachedBlogInfo, setCachedBlogInfo, loadAllFollowedBlogLists, saveFollowedBlogsForAccount } from '$lib/cache';
+
 	import { settings } from '$lib/stores/settings';
+	import type { TumblrAccount } from '$lib/types';
 	import {
 		Users,
 		User,
@@ -20,7 +22,7 @@
 		Clock,
 		Heart,
 		Code
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let selectedDebugBlog = $state<any>(null);
 	let showPageDebug = $state(false);
@@ -69,10 +71,9 @@
 
 	onMount(async () => {
 		if (browser) {
-			const cached = await getCachedFollowedBlogs();
-			if (cached && cached.length > 0) {
-				followedBlogs = cached;
-			}
+			const allEntries = await loadAllFollowedBlogLists();
+			const merged = allEntries.flatMap((e) => e.blogs);
+			if (merged.length > 0) followedBlogs = merged;
 		}
 	});
 
@@ -153,6 +154,7 @@
 					if (blog.share_likes !== undefined) {
 						// Server enriched it, cache it!
 						await setCachedBlogInfo(blog.name, {
+							blogName: blog.name,
 							share_likes: blog.share_likes,
 							likes: blog.likes,
 							updated: blog.updated,
@@ -180,8 +182,12 @@
 					followedBlogs = reset ? uniqueNew : [...followedBlogs, ...uniqueNew];
 					accountOffsets = { ...accountOffsets, ...newOffsets };
 					
-					// Save the updated full list to IndexedDB
-					await setCachedFollowedBlogs(followedBlogs);
+					// Save the updated full list to IndexedDB (merged across accounts)
+					await Promise.all(
+						activeAccounts.map((acc) =>
+							saveFollowedBlogsForAccount(acc.blogName, followedBlogs)
+						)
+					);
 				}
 			}
 		} catch (err: any) {

@@ -6,12 +6,12 @@
 	import { cacheAllVisible } from "$lib/cacheUtils";
 	import { filterPosts, type PostFilter } from "$lib/postFilter";
 	import { getAllMediaUrls } from '$lib/mediaUrls';
-	import { bulkIsMediaCached } from '$lib/stores/db';
-	import PostCard from "$lib/components/PostCard.svelte";
-	import LazyRender from "$lib/components/LazyRender.svelte";
+	import { bulkIsMediaCached, bulkSetPosts } from '$lib/cache';
+	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
+	import type { TumblrPost, TumblrAccount } from '$lib/types';
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
+	import PostCard from "$lib/components/PostCard.svelte";
 	import Slideshow from "$lib/components/Slideshow.svelte";
-	import type { TumblrPost, TumblrAccount } from "$lib/types";
 	import {
 		Heart,
 		User,
@@ -20,7 +20,8 @@
 		Play,
 		Home,
 		Search,
-	} from "lucide-svelte";
+		Layers, Image as ImageIcon, Video, Music, Quote, Link as LinkIcon, MessageSquare, HelpCircle, FileText
+	} from "@lucide/svelte";
 
 	let likes: TumblrPost[] = $state([]);
 	let loading = $state(false);
@@ -31,6 +32,7 @@
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
 	let slideshowStartPostId = $state<string | number | null>(null);
+	let slideshowStartMediaUrl = $state<string | null>(null);
 	let likesScrollContainer = $state<HTMLElement | null>(null);
 	let gridContainer = $state<HTMLElement | null>(null);
 
@@ -47,7 +49,8 @@
 		if (width >= 1024) return 5;
 		if (width >= 768) return 4;
 		if (width >= 640) return 3;
-		return 2;
+		if (width >= 480) return 2;
+		return 1;
 	}
 
 	let columnCount = $derived.by(() => {
@@ -122,16 +125,16 @@
 	
 	let fetchController: AbortController | null = null;
 
-	const FILTERS: { value: PostFilter; label: string }[] = [
-		{ value: "all", label: "All" },
-		{ value: "photo", label: "Photos" },
-		{ value: "video", label: "Videos" },
-		{ value: "audio", label: "Audio" },
-		{ value: "quote", label: "Quotes" },
-		{ value: "link", label: "Links" },
-		{ value: "chat", label: "Chat" },
-		{ value: "answer", label: "Asks" },
-		{ value: "text", label: "Text" }
+	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
+		{ value: "all", label: "All", icon: Layers },
+		{ value: "photo", label: "Photos", icon: ImageIcon },
+		{ value: "video", label: "Videos", icon: Video },
+		{ value: "audio", label: "Audio", icon: Music },
+		{ value: "quote", label: "Quotes", icon: Quote },
+		{ value: "link", label: "Links", icon: LinkIcon },
+		{ value: "chat", label: "Chat", icon: MessageSquare },
+		{ value: "answer", label: "Asks", icon: HelpCircle },
+		{ value: "text", label: "Text", icon: FileText }
 	];
 
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
@@ -189,8 +192,9 @@
 		downloadingAll = false;
 	}
 
-	function openSlideshowFromPost(post: TumblrPost, _mediaUrl?: string) {
+	function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
+		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
@@ -255,10 +259,21 @@
 				if (uniqueNew.length === 0 && newLikes.length > 0) {
 					// All duplicates, but we might have more pages
 				} else if (uniqueNew.length === 0) {
-					hasMore = false;
 				} else {
 					likes = [...likes, ...uniqueNew];
 					accountOffsets = { ...accountOffsets, ...newBefore };
+					
+					const likeUpdates: Record<string, Record<string, boolean>> = {};
+					for (const r of data.accountResponses || []) {
+						for (const p of r.liked_posts || []) {
+							if (!likeUpdates[p.id]) likeUpdates[p.id] = {};
+							likeUpdates[p.id][r.accountBlogName] = true;
+						}
+					}
+					
+					void bulkSetPosts(uniqueNew, {
+						likedBy: likeUpdates
+					}).then(() => refreshUnreferencedPosts());
 				}
 			}
 		} catch (err: any) {
@@ -452,20 +467,21 @@
 				{/each}
 			</div>
 
-			<div class="flex items-center gap-4">
-				<div
-					class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit flex-wrap"
-				>
+			<div class="flex flex-col sm:flex-row items-end sm:items-center gap-4 w-full max-w-full">
+				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto w-full sm:w-auto max-w-full hide-scrollbar justify-start">
 					{#each FILTERS as f}
+						{@const Icon = f.icon}
 						<button
-							class="tab {currentFilter === f.value
-								? 'tab-active bg-primary text-white'
-								: 'text-gray-400'}"
+							class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => { currentFilter = f.value; }}
-						>{f.label}</button>
+							title={f.label}
+						>
+							<Icon size={14} />
+							<span class="hidden sm:inline">{f.label}</span>
+						</button>
 					{/each}
 				</div>
-				<div class="flex items-center gap-2">
+				<div class="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
 					<select class="select select-bordered select-sm bg-gray-900 text-white border-gray-800" bind:value={$settings.mediaColumns}>
 						<option value="auto">Auto Columns</option>
 						<option value="2">2 Columns</option>
@@ -481,14 +497,14 @@
 						<option value="20">20 Columns</option>
 					</select>
 					<button
-						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-						onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+						class="btn btn-sm btn-outline gap-1 border-gray-600 hover:bg-gray-800 text-gray-300 flex-1 sm:flex-none"
+						onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
 						disabled={filteredLikes.length === 0}
 					>
-						<Play size={16} /> Play Slideshow
+						<Play size={16} /> <span class="hidden sm:inline">Play Slideshow</span><span class="sm:hidden">Play</span>
 					</button>
 					<button
-						class="btn btn-sm btn-primary gap-2"
+						class="btn btn-sm btn-primary gap-1 flex-1 sm:flex-none"
 						onclick={startCacheAll}
 						disabled={downloadingAll || isOffline}
 					>
@@ -496,7 +512,7 @@
 							<Loader2 size={16} class="animate-spin" />
 							{downloadProgress.done}/{downloadProgress.total}
 						{:else}
-							<Download size={16} /> Cache Visible
+							<Download size={16} /> <span class="hidden sm:inline">Cache Visible</span><span class="sm:hidden">Cache</span>
 						{/if}
 					</button>
 				</div>
@@ -546,9 +562,7 @@
 									>
 										{#each rowItem.posts as post (post.id)}
 											<div id={"post-" + post.id} class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
-												<LazyRender>
-													<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
-												</LazyRender>
+												<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
 											</div>
 										{/each}
 									</div>
@@ -567,6 +581,7 @@
 	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
+	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredLikes}
 	onReachEnd={async () => {
 		await loadLikes();

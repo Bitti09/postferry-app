@@ -1,12 +1,15 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { onMount, untrack } from 'svelte';
-	import { accounts } from '$lib/stores/accounts';
+	import { accounts, accountsReady } from '$lib/stores/accounts';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { ArrowLeft, Play } from 'lucide-svelte';
+	import { ArrowLeft, Play } from '@lucide/svelte';
 	import { settings } from '$lib/stores/settings';
+	import { bulkSetPosts } from '$lib/cache';
+
 
 	let blogName = $page.params.blogName;
 	
@@ -19,7 +22,9 @@
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
 	let slideshowStartPostId = $state<string | number | null>(null);
-	
+	let slideshowStartMediaUrl = $state<string | null>(null);
+	let isOffline = $state(false);
+
 	let currentFilter = $state('all');
 
 	$effect(() => {
@@ -43,7 +48,7 @@
 			activeSlideshowPostId = null;
 		}
 	});
-	
+
 	// Filter logic
 	let filteredLikes = $derived(likes.filter(post => {
 		if (currentFilter === 'all') return true;
@@ -53,21 +58,53 @@
 		return true;
 	}));
 
-	function openSlideshowFromPost(post: any, _mediaUrl?: string) {
+	function openSlideshowFromPost(post: any, mediaUrl?: string) {
 		slideshowStartPostId = post?.id ?? null;
+		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
 	onMount(() => {
-		if (!activeAccount) {
+		if (!browser) {
+			return;
+		}
+		isOffline = !navigator.onLine;
+		const onOnline = () => { isOffline = false; };
+		const onOffline = () => { isOffline = true; };
+		window.addEventListener('online', onOnline);
+		window.addEventListener('offline', onOffline);
+		return () => {
+			window.removeEventListener('online', onOnline);
+			window.removeEventListener('offline', onOffline);
+		};
+	});
+
+	// Wait for accounts IDB hydration, then reactively load whenever an active account appears.
+	$effect(() => {
+		const ready = $accountsReady;
+		const acct = activeAccount;
+		if (!ready) {
+			// Don't set `loading = true` here — loadLikes() guards on `loading`
+			// and would early-return, leaving the spinner stuck forever.
+			return;
+		}
+		if (!acct) {
+			loading = false;
 			error = 'No active account. Please activate an account to view likes.';
 			return;
 		}
-		loadLikes();
+		error = '';
+		if (likes.length === 0) {
+			loadLikes();
+		}
 	});
 
 	async function loadLikes() {
 		if (!activeAccount || loading || !hasMore) return;
+		if (isOffline) {
+			loading = false;
+			return;
+		}
 		loading = true;
 		fetchController = new AbortController();
 
@@ -92,13 +129,14 @@
 			} else {
 				const existingIds = new Set(likes.map((p) => p.id));
 				const uniqueNew = newLikes.filter((p: any) => !existingIds.has(p.id));
-				
+
 				if (uniqueNew.length === 0) {
 					hasMore = false;
 				} else {
 					likes = [...likes, ...uniqueNew];
 					// The "before" timestamp for likes is the `liked_timestamp` of the oldest post in the batch
 					beforeTimestamp = Math.min(...uniqueNew.map((p: any) => p.liked_timestamp));
+					void bulkSetPosts(uniqueNew);
 				}
 			}
 		} catch (err: any) {
@@ -133,7 +171,7 @@
 			</div>
 			<button
 				class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
-				onclick={() => { slideshowStartPostId = null; slideshowActive = true; }}
+				onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
 				disabled={filteredLikes.length === 0}
 			>
 				<Play size={16} /> Play Slideshow
@@ -141,7 +179,11 @@
 		</div>
 	</header>
 
-	{#if error && (typeof navigator === 'undefined' || navigator.onLine)}
+	{#if !$accountsReady}
+		<div class="flex justify-center py-20 items-center">
+			<span class="loading loading-spinner loading-lg text-primary"></span>
+		</div>
+	{:else if error && (typeof navigator === 'undefined' || navigator.onLine)}
 		<div class="alert alert-error mb-6">{error}</div>
 	{/if}
 
@@ -169,6 +211,7 @@
 	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
+	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredLikes}
 	onReachEnd={async () => { await loadLikes(); }}
 />
