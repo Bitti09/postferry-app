@@ -1,60 +1,45 @@
 <script lang="ts">
-	import { onMount, onDestroy } from "svelte";
+	import { onMount, onDestroy, untrack } from "svelte";
 	import { settings } from "$lib/stores/settings";
 	import {
 		clearCache,
 		getMediaCacheStats,
 	} from "$lib/stores/db";
-	import { getAllCachedMedia } from "$lib/stores/mediaCache";
+	import { getCachedPostsPage } from "$lib/stores/postCache";
+	import {
+		refreshUnreferencedPosts,
+		unreferencedPosts,
+	} from "$lib/stores/unreferencedPosts";
 	import PostCard from "$lib/components/PostCard.svelte";
-	import LazyRender from "$lib/components/LazyRender.svelte";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
 	import Slideshow from "$lib/components/Slideshow.svelte";
+	import type { TumblrPost, PostFilter } from "$lib/types";
 	import {
 		ArrowLeft,
 		Trash2,
 		HardDrive,
-		Play
-	} from "lucide-svelte";
+		Play,
+		Filter,
+	} from "@lucide/svelte";
 
-	let mediaItems: any[] = $state([]);
-	let cachedPosts: any[] = $state([]);
+	// Page rows over the cursor. 100 keeps a single IDB cursor walk small;
+	// the page never holds more than `cachedPosts` worth of rows in JS.
+	const PAGE_SIZE = 100;
+
+type PostCursor = { cachedAt: number; id: number } | null;
+
+	let cachedPosts = $state<TumblrPost[]>([]);
+	let total = $state(0);
 	let loading = $state(true);
+	let loadingMore = $state(false);
+	let error = $state<string | null>(null);
 	let currentFilter = $state("all");
+	let nextCursor = $state<PostCursor>(null);
+	// Per-request token so out-of-order responses can't clobber state when the
+	// user changes filters (or scrolls) faster than the DB replies.
+	let loadToken = 0;
 
-	let filteredPosts = $derived(
-		cachedPosts.filter((post) => {
-			if (currentFilter === "all") return true;
-			
-			// Check for specific content blocks in NPF (Tumblr often returns NPF link posts as 'text')
-			const blocks = [...(post.content || []), ...(post.trail || []).flatMap((t: any) => t.content || [])];
-			
-			if (currentFilter === 'photo') return blocks.some((b: any) => b.type === 'image') || post.type === 'photo';
-			if (currentFilter === 'video') return blocks.some((b: any) => b.type === 'video') || post.type === 'video';
-			
-			return post.type === currentFilter;
-		})
-	);
-
-	// Infinite Loading
-	let visibleCount = $state(40);
-	
-	let visibleItems = $derived(
-		filteredPosts.slice(0, visibleCount),
-	);
-	
-	let hasMore = $derived(visibleCount < filteredPosts.length);
-
-	function loadMore() {
-		if (hasMore) {
-			visibleCount += 40;
-		}
-	}
-
-	// Stats
 	let cacheStats = $state({ count: 0, estimatedMb: 0 });
-
-	// Browser storage quota
 	let storageQuota = $state({ usageMb: 0, quotaMb: 0, pct: 0 });
 
 	async function refreshStorageQuota() {
@@ -69,90 +54,143 @@
 		};
 	}
 
-	$effect(() => {
-		currentFilter;
-		visibleCount = 40;
+	// Filters are evaluated at the storage layer, so the loaded subset is
+	// already the filtered set. No in-memory JS filter loop anymore.
+	let hasMore = $derived(nextCursor !== null);
+
+async function loadPage(opts: { before?: PostCursor | null; append: boolean; filter: string }) {
+	const token = ++loadToken;
+	// `before` is `KeysetCursor | undefined`; passing `null` is a type error,
+	// so we collapse it to `undefined` here.
+	const result = await getCachedPostsPage({
+		limit: PAGE_SIZE,
+		before: opts.before ?? undefined,
+		filter: opts.filter as PostFilter
 	});
+	// A newer request (filter change, refresh, etc.) has been issued; drop
+	// this stale result so we don't intermix pages from different filters.
+	if (token !== loadToken) return;
 
-	let slideshowActive = $state(false);
-	let activeSlideshowPostId = $state<string | number | null>(null);
-	let slideshowStartPostId = $state<string | number | null>(null);
-
-	$effect(() => {
-		if (!slideshowActive && activeSlideshowPostId) {
-			const el = document.getElementById(`post-${activeSlideshowPostId}`);
-			if (el) {
-				el.scrollIntoView({ behavior: 'instant', block: 'center' });
-			}
-			activeSlideshowPostId = null;
-		}
-	});
-
-	function openSlideshowFromPost(post: any) {
-		slideshowStartPostId = post?.id ?? null;
-		slideshowActive = true;
+	if (opts.append) {
+		cachedPosts = [...cachedPosts, ...result.entries.map((e) => e.post)];
+	} else {
+		cachedPosts = result.entries.map((e) => e.post);
 	}
+	total = result.total;
+	nextCursor = (result.nextCursor as PostCursor | null) ?? null;
+}
 
-	async function handleClear() {
-		if (confirm("Clear all downloaded media blobs?")) {
-			await clearCache();
-			for (const item of mediaItems) {
-				URL.revokeObjectURL(item.url);
-			}
-			mediaItems = [];
-			cachedPosts = [];
-			cacheStats = { count: 0, estimatedMb: 0 };
-			storageQuota = {
-				usageMb: 0,
-				quotaMb: storageQuota.quotaMb,
-				pct: 0,
-			};
-			await refreshStorageQuota();
-		}
+async function refreshAll() {
+	loading = true;
+	error = null;
+	try {
+		// Run the page load + the media stats query in parallel. The page
+		// query goes through loadPage() so the loadToken guard rejects any
+		// stale response (e.g. if a filter change raced with mount).
+		await Promise.all([
+			loadPage({ before: null, append: false, filter: currentFilter }),
+			getMediaCacheStats().then((s) => (cacheStats = s))
+		]);
+		await refreshStorageQuota();
+		await refreshUnreferencedPosts();
+	} catch (e) {
+		error = e instanceof Error ? e.message : String(e);
+	} finally {
+		loading = false;
 	}
+}
 
-	onMount(async () => {
+async function loadMore() {
+	if (loadingMore || !hasMore || nextCursor === null) return;
+	loadingMore = true;
+	try {
+		await loadPage({ before: nextCursor, append: true, filter: currentFilter });
+	} catch (e) {
+		error = e instanceof Error ? e.message : String(e);
+	} finally {
+		loadingMore = false;
+	}
+}
+
+// Filter change: drop the loaded window, ask storage for the first page
+// under the new filter. The total at the top of the page reflects the
+// storage-side count, so the user sees the real filtered size.
+$effect(() => {
+	// Only re-run when the filter changes; `untrack` keeps the body off the
+	// `loading`/`cachedPosts` reactive graph so the effect doesn't re-fire
+	// when refreshAll() finishes its first load.
+	const filter = untrack(() => currentFilter);
+	const stillLoading = untrack(() => loading);
+	if (stillLoading) return;
+	loading = true;
+	error = null;
+	(async () => {
 		try {
-			mediaItems = await getAllCachedMedia();
-			cacheStats = await getMediaCacheStats();
-			await refreshStorageQuota();
-			
-			const seenIds = new Set();
-			const posts = [];
-			
-			for (const item of mediaItems) {
-				if (item.post && !seenIds.has(item.post.id)) {
-					seenIds.add(item.post.id);
-					posts.push(item.post);
-				} else if (!item.post && !seenIds.has(item.originalUrl)) {
-					seenIds.add(item.originalUrl);
-					posts.push({
-						id: item.originalUrl,
-						blog_name: 'unknown',
-						type: item.type.startsWith('video') ? 'video' : 'photo',
-						summary: 'Legacy Cached Media',
-						photos: item.type.startsWith('video') ? [] : [{ original_size: { url: item.originalUrl } }],
-						video_url: item.type.startsWith('video') ? item.originalUrl : undefined,
-						timestamp: item.timestamp || 0
-					});
-				}
-			}
-			
-			cachedPosts = posts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+			await loadPage({ before: null, append: false, filter });
 		} catch (e) {
-			console.error(e);
+			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			loading = false;
 		}
-	});
+	})();
+});
 
-	onDestroy(() => {
-		// Revoke object URLs created for cache entries
-		for (const item of mediaItems) {
-			if (item.url) URL.revokeObjectURL(item.url);
-		}
-	});
+let slideshowActive = $state(false);
+
+let activeSlideshowPostId = $state<string | number | null>(null);
+let slideshowStartPostId = $state<string | number | null>(null);
+let slideshowStartMediaUrl = $state<string | null>(null);
+function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
+	slideshowStartPostId = post?.id ?? null;
+	slideshowStartMediaUrl = mediaUrl ?? null;
+	slideshowActive = true;
+}
+
+function offlineHref(post: TumblrPost): string {
+	const blog = post?.blog_name;
+	const id = post?.id;
+	if (!blog || id === undefined || id === null) return "#";
+	return `/post/${blog}/${id}?offline=1`;
+}
+
+async function handleClear() {
+	if (!confirm("Clear all cached posts and blobs?")) return;
+	await clearCache();
+	cachedPosts = [];
+	total = 0;
+	nextCursor = null;
+	cacheStats = { count: 0, estimatedMb: 0 };
+	storageQuota = {
+		usageMb: 0,
+		quotaMb: storageQuota.quotaMb,
+		pct: 0,
+	};
+	await refreshStorageQuota();
+	await refreshUnreferencedPosts();
+}
+
+function onVisibilityChange() {
+	if (document.visibilityState === "visible") {
+		void refreshAll();
+	}
+}
+
+onMount(() => {
+	void refreshAll();
+	document.addEventListener("visibilitychange", onVisibilityChange);
+});
+
+onDestroy(() => {
+	document.removeEventListener("visibilitychange", onVisibilityChange);
+});
 </script>
+
+
+{#if error}
+	<div class="alert alert-error shadow-lg mb-6 mx-4 mt-4">
+		<span>Cache error: {error}</span>
+	</div>
+{/if}
 
 <div class="min-h-screen p-4 md:p-8 bg-black">
 	<header
@@ -166,19 +204,15 @@
 				<ArrowLeft size={24} />
 			</button>
 			<div>
-				<h1 class="text-3xl font-bold text-white tracking-tight">
-					Media Cache
-				</h1>
+				<h1 class="text-3xl font-bold text-white tracking-tight">Media Cache</h1>
 				<p class="text-xs text-gray-500 font-bold mt-0.5">
-					{cacheStats.count} blobs stored · {cacheStats.estimatedMb} MB
-					used
+					{total} posts{currentFilter !== 'all' ? ` · filter: ${currentFilter}` : ''} · {cacheStats.count} blobs · {cacheStats.estimatedMb} MB used
 				</p>
 			</div>
 		</div>
 
 		<div class="flex flex-col items-end gap-3">
 			<div class="flex items-center gap-3">
-				<!-- Storage Ring Widget -->
 				{#if storageQuota.quotaMb > 0}
 					{@const r = 20}
 					{@const circ = 2 * Math.PI * r}
@@ -225,12 +259,10 @@
 							>
 							<span class="text-[10px] text-gray-500 font-bold">
 								{storageQuota.usageMb >= 1024
-									? (storageQuota.usageMb / 1024).toFixed(1) +
-										" GB"
-									: storageQuota.usageMb + " MB"}
-								/ {storageQuota.quotaMb >= 1024
-									? (storageQuota.quotaMb / 1024).toFixed(0) +
-										" GB"
+									? (storageQuota.usageMb / 1024).toFixed(1) + " GB"
+									: storageQuota.usageMb + " MB"} /
+								{storageQuota.quotaMb >= 1024
+									? (storageQuota.quotaMb / 1024).toFixed(0) + " GB"
 									: storageQuota.quotaMb + " MB"}
 							</span>
 						</div>
@@ -244,14 +276,14 @@
 					<Trash2 size={16} /> Clear Cache
 				</button>
 			</div>
-			
-			{#if cachedPosts.length > 0}
+
+			{#if total > 0}
 				<div class="flex items-center gap-4">
 					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
 						<button
 							class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => (currentFilter = "all")}
-						>All Media</button>
+						>All</button>
 						<button
 							class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => (currentFilter = "photo")}
@@ -265,9 +297,10 @@
 						class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
 						onclick={() => {
 							slideshowStartPostId = null;
+							slideshowStartMediaUrl = null;
 							slideshowActive = true;
 						}}
-						disabled={filteredPosts.length === 0}
+						disabled={cachedPosts.length === 0}
 					>
 						<Play size={16} /> Play Slideshow
 					</button>
@@ -276,19 +309,16 @@
 		</div>
 	</header>
 
-	{#if loading}
+	{#if loading && cachedPosts.length === 0}
 		<div class="flex justify-center py-20 items-center">
-			<span class="loading loading-spinner loading-lg text-primary"
-			></span>
+			<span class="loading loading-spinner loading-lg text-primary"></span>
 		</div>
-	{:else if cachedPosts.length === 0}
+	{:else if total === 0}
 		<div class="hero py-20 rounded-3xl bg-base-200">
 			<div class="hero-content text-center">
 				<div class="max-w-md">
 					<HardDrive size={48} class="mx-auto mb-4 text-gray-600" />
-					<h2 class="text-3xl font-bold text-white">
-						Cache is empty
-					</h2>
+					<h2 class="text-3xl font-bold text-white">Cache is empty</h2>
 					<p class="py-6 text-gray-500">
 						Go back to the dashboard and scroll to cache some media.
 					</p>
@@ -297,26 +327,31 @@
 			</div>
 		</div>
 	{:else}
-		<main 
+		<main
 			class="grid gap-4 items-start {$settings.mediaColumns === 'auto' ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7' : ''}"
 			style={$settings.mediaColumns !== 'auto' ? `grid-template-columns: repeat(${$settings.mediaColumns}, minmax(0, 1fr));` : ''}
 		>
-			{#each visibleItems as post (post.id)}
-				<div id={"post-" + post.id}>
-					<LazyRender>
-						<PostCard {post} mode="cache" onclickOverride={() => openSlideshowFromPost(post)} />
-					</LazyRender>
-				</div>
+			{#each cachedPosts as post (post.id)}
+				<a
+					id={"post-" + post.id}
+					href={offlineHref(post)}
+					data-sveltekit-preload-data="off"
+					class="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl"
+					title="Open from offline cache"
+				>
+					<PostCard {post} mode="cache" onMediaClick={openSlideshowFromPost} />
+				</a>
 			{/each}
 		</main>
-		
-		{#if filteredPosts.length === 0 && cachedPosts.length > 0}
+
+		{#if cachedPosts.length === 0 && total > 0}
 			<div class="py-20 text-center text-gray-500">
+				<Filter size={32} class="mx-auto mb-3 text-gray-600" />
 				No media matches the current filter.
 			</div>
 		{/if}
 
-		<InfiniteScroll {hasMore} loading={false} onload={loadMore} />
+		<InfiniteScroll {hasMore} loading={loadingMore} onload={loadMore} />
 	{/if}
 </div>
 
@@ -324,8 +359,9 @@
 	bind:active={slideshowActive}
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
-	posts={filteredPosts}
+	startMediaUrl={slideshowStartMediaUrl}
+	posts={cachedPosts}
 	onReachEnd={async () => {
-		loadMore();
+		await loadMore();
 	}}
 />
