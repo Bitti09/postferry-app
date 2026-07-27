@@ -1,15 +1,20 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { dev } from "$app/environment";
+	import { page } from "$app/stores";
 	import { accounts, accountsReady } from "$lib/stores/accounts";
 	import NPFRenderer from "$lib/components/NPFRenderer.svelte";
 	import AvatarImage from "$lib/components/AvatarImage.svelte";
-	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize } from "lucide-svelte";
+	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize, WifiOff } from "@lucide/svelte";
+	import { bulkSetPosts, getCachedPostById, mergeNotes } from "$lib/stores/postCache";
+	import { getMediaForPost, type MediaRef } from "$lib/stores/mediaCache";
 	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
 
 	let { data } = $props();
 	let blogName = $derived(data.blogName);
 	let postId = $derived(data.postId);
+
+	let isOfflinePost = $derived($page.url.searchParams.get('offline') === '1');
 
 	let post = $state<any>(null);
 	let notes = $state<any[]>([]);
@@ -17,7 +22,9 @@
 	let error = $state("");
 	let useGrid = $state(true);
 	let showDebug = $state(false);
-
+	// IndexedDB blobsByPost view; populated on offline load so media
+	// metadata is available without re-extracting URLs from NPF content.
+	let linkedMedia = $state<MediaRef[]>([]);
 	// Notes pagination
 	let notesLoading = $state(false);
 	let notesHasMore = $state(false);
@@ -152,7 +159,19 @@
 			// Use the first result for the main post data & notes
 			const primary = results[0];
 			post = primary.post;
-			notes = primary.notes || [];
+			const initialNotes: any[] = primary.notes || [];
+			notes = initialNotes;
+
+			// Cache the post for offline reading. `bulkSetPosts` dedupes by id
+			// and re-stamps `cachedAt`, so calling it here is idempotent.
+			if (primary.post?.id !== undefined && primary.post?.id !== null) {
+				void bulkSetPosts([primary.post]);
+			}
+
+			// Persist any notes this batch returned into the per-post notes store.
+			if (initialNotes.length > 0) {
+				void mergeNotes(postId, initialNotes);
+			}
 
 			// Detect if more notes exist (API returns ≤50 at a time)
 			if (notes.length > 0) {
@@ -196,6 +215,14 @@
 
 	$effect(() => {
 		const ready = $accountsReady;
+		const offline = isOfflinePost;
+
+		// Offline mode skips the account/network path entirely.
+		if (offline) {
+			if (blogName && postId) loadOfflinePost();
+			return;
+		}
+
 		if (!ready) {
 			loading = true;
 			error = "";
@@ -207,6 +234,55 @@
 		}
 	});
 
+async function loadOfflinePost() {
+	loading = true;
+	error = "";
+	post = null;
+	notes = [];
+	try {
+		const numericPostId = Number(postId);
+		const entry = await getCachedPostById(numericPostId);
+		if (entry?.post) {
+			post = entry.post;
+			const embeddedNotes = Array.isArray(entry.notes) ? entry.notes : [];
+			const seen = new Set<string>();
+			const merged: any[] = [];
+			for (const n of embeddedNotes) {
+				if (!n) continue;
+				const k = `${n.blog_name}_${n.timestamp}_${n.type}`;
+				if (seen.has(k)) continue;
+				seen.add(k);
+				merged.push(n);
+			}
+			notes = merged;
+			// Warm the linked-media index view. The byPost index now exposes
+			// every blob key we wrote atomically with the post, so the UI can
+			// hydrate offline with zero network calls.
+			try {
+				linkedMedia = await getMediaForPost(numericPostId);
+			} catch (e) {
+				console.warn('[offline] failed to load linked media metadata', e);
+				linkedMedia = [];
+			}
+			const totals = summarizeNotes(notes);
+			noteTotals = {
+				...totals,
+				processed: notes.length,
+				complete: notes.length >= (post?.note_count ?? 0)
+			};
+			notesHasMore = false;
+			notesBeforeTimestamp = null;
+			accountLikes = {};
+			rebloggedAccounts = {};
+		} else {
+			error = "This post is not in your offline cache. Visit a feed while online to cache it.";
+		}
+	} catch (e) {
+		error = e instanceof Error ? e.message : "Failed to read offline cache.";
+	} finally {
+		loading = false;
+	}
+}
 	async function toggleLike(account: any) {
 		if (likingAccount) return;
 		const currentlyLiked = accountLikes[account.blogName] || false;
@@ -293,6 +369,7 @@
 				const unique = newNotes.filter(n => !existingKeys.has(`${n.blog_name}_${n.timestamp}`));
 				notes = [...notes, ...unique];
 				if (unique.length > 0) {
+					void mergeNotes(postId, unique);
 					const add = summarizeNotes(unique);
 					noteTotals = {
 						likes: noteTotals.likes + add.likes,
@@ -446,6 +523,20 @@
 					{post.type}
 				</span>
 			{/if}
+			{#if isOfflinePost}
+				<span
+					title="Loaded from your local media cache — live notes disabled"
+					class="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg border border-amber-500/40 text-amber-400 bg-amber-500/10"
+				>
+					<WifiOff size={12} /> Offline Cache
+				</span>
+				{#if post}
+					<a
+						href={`/post/${post.blog_name}/${post.id}`}
+						class="text-[10px] font-bold text-primary hover:underline uppercase tracking-widest"
+					>Load live</a>
+				{/if}
+			{/if}
 		</div>
 	</div>
 
@@ -559,9 +650,22 @@
 					</div>
 
 					<!-- Interaction Section -->
+					{#if isOfflinePost}
+						<div class="space-y-4">
+							<h3 class="text-[10px] font-black uppercase text-gray-600 tracking-[0.2em] px-4">Interactions</h3>
+							<div class="px-4 py-6 rounded-3xl border border-gray-800/50 bg-black/20 text-gray-500 text-sm">
+								<p class="font-bold text-gray-400 mb-1">Disabled in offline mode</p>
+								<p>Like and reblog require a live Tumblr session. Open the live version to interact.</p>
+								<a
+									href={`/post/${post?.blog_name}/${post?.id}`}
+									class="btn btn-sm btn-outline mt-3"
+								>Open live</a>
+							</div>
+						</div>
+					{:else}
 					<div class="space-y-4">
 						<h3 class="text-[10px] font-black uppercase text-gray-600 tracking-[0.2em] px-4">Interactions</h3>
-						
+
 						<div class="space-y-6">
 							{#each activeAccounts as account}
 								{@const isLiked = accountLikes[account.blogName]}
@@ -574,7 +678,7 @@
 										<span class="text-sm font-black text-white truncate">{account.blogName}</span>
 									</div>
 									<div class="grid grid-cols-2 gap-3">
-										<button 
+										<button
 											class="btn btn-sm h-11 rounded-2xl border-gray-800 gap-2 transition-all {isLiked ? 'bg-pink-500/10 border-pink-500/50 text-pink-500' : 'bg-gray-800/50 hover:bg-gray-800 text-gray-400'}"
 											onclick={() => toggleLike(account)}
 											disabled={likingAccount === account.blogName}
@@ -587,7 +691,7 @@
 											<span class="font-bold">{isLiked ? 'Liked' : 'Like'}</span>
 										</button>
 
-										<button 
+										<button
 											class="btn btn-sm h-11 rounded-2xl border-gray-800 gap-2 transition-all {isReblogged ? 'bg-green-500/10 border-green-500/50 text-green-500 pointer-events-none' : 'bg-gray-800/50 hover:bg-gray-800 text-gray-400'}"
 											onclick={() => handleReblog(account)}
 											disabled={rebloggingAccount === account.blogName}
@@ -606,6 +710,7 @@
 							{/each}
 						</div>
 					</div>
+					{/if}
 				</div>
 			</aside>
 
