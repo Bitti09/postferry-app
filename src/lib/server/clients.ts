@@ -37,30 +37,31 @@ export function clientFor(account: AccountCredentials): Client | null {
 	return client;
 }
 
+export interface ParsedAccountsBody {
+	/** Normalized: `accounts[]`, or `[account]` when a single-account payload. */
+	accounts: (AccountCredentials & Record<string, unknown>)[];
+	/** Route-specific fields (blogName, postId, offsets, ...) verbatim. */
+	[key: string]: unknown;
+}
+
 /**
- * Parse a request body carrying either `accounts: AccountCredentials[]` or a
- * single `account`, and return the WHOLE parsed body — callers destructure
- * both the account fields and their route-specific fields from the same
- * objects. The request body can only be read ONCE; routes must never call
- * `request.json()` again after this (it throws "Body has already been read").
- *
+ * Read the request body EXACTLY once and normalize the account list.
+ * Accepts `{ accounts: [...] }` (multi-account) or `{ account: {...} }`
+ * (legacy single-account). Returns the whole parsed body so callers
+ * destructure route-specific fields from the top level — the body cannot
+ * be read again ("Body has already been read" throws otherwise).
  * Returns null on malformed JSON or an absent/empty account list.
  */
-export async function readAccounts(
-	request: Request
-): Promise<(AccountCredentials & Record<string, unknown>)[] | null> {
+export async function readAccounts(request: Request): Promise<ParsedAccountsBody | null> {
 	try {
-		const body = (await request.json()) as {
-			accounts?: (AccountCredentials & Record<string, unknown>)[];
-			account?: AccountCredentials & Record<string, unknown>;
-		};
-		const list = Array.isArray(body.accounts)
+		const body = (await request.json()) as Record<string, unknown>;
+		const raw = Array.isArray(body.accounts)
 			? body.accounts
 			: body.account
 				? [body.account]
 				: null;
-		if (!list || list.length === 0) return null;
-		return list;
+		if (!raw || raw.length === 0) return null;
+		return { ...body, accounts: raw as (AccountCredentials & Record<string, unknown>)[] };
 	} catch {
 		return null;
 	}

@@ -6,19 +6,18 @@ interface TumblrError extends Error {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Invalid account payload', { status: 400 });
 	}
-	// Route fields ride on the account objects (single body read).
-	const first = accounts[0] as (typeof accounts)[number] & {
+	const { accounts } = body;
+	const { blogName, postId, before_timestamp, before, npf } = body as {
 		blogName?: string;
 		postId?: string | number;
 		before_timestamp?: string | number;
 		before?: string | number;
 		npf?: boolean;
 	};
-	const { blogName, postId, before_timestamp, before, npf } = first ?? {};
 
 	if (!blogName || !postId) {
 		return new Response('blogName and postId are required', { status: 400 });

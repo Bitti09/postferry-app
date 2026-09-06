@@ -2,12 +2,12 @@ import { clientFor, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Invalid account payload', { status: 400 });
 	}
-	// Route fields ride on the account objects (single body read).
-	const blogName = accounts[0]?.blogName as string | undefined;
+	const { accounts } = body;
+	const blogName = body.blogName as string | undefined;
 	if (!blogName) {
 		return new Response('blogName is required', { status: 400 });
 	}
