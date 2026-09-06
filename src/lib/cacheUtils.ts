@@ -33,7 +33,7 @@ export async function cacheAllVisible(
 		// Posts arrive as Svelte $state proxies from component props; snapshot
 		// to plain data — IDB structured clone rejects proxies, and this object
 		// is written to IDB when the download completes.
-		const plainPost: TumblrPost = $state.snapshot(post);
+		const plainPost: TumblrPost = JSON.parse(JSON.stringify(post));
 		const meta: SlimMediaMeta = {
 			postId: plainPost.id,
 			blogName: plainPost.blog_name,

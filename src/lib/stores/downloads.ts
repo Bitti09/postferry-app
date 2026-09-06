@@ -165,13 +165,13 @@ if (browser && navigator.serviceWorker) {
 			const meta = downloadMeta.get(url);
 			if (meta) {
 				try {
-					const mediaBase = mediaAssetBase(url);
-					await db.mediaUrls.put({ url, postId: meta.postId, type: mimeType || '', cachedAt: Date.now(), base: mediaBase });
 					if (meta.post) {
-						// meta.post may be a Svelte $state proxy (it was captured from
-						// component props at queue time). IDB structured clone rejects
-						// proxies — snapshot to plain data first.
-						const plainPost: TumblrPost = $state.snapshot(meta.post);
+						// meta.post may be a Svelte $state proxy (captured from
+						// component props at queue time) — IDB structured clone
+						// rejects proxies. This is a plain .ts module, so no runes
+						// here: JSON round-trip reads through proxies and produces
+						// plain structured-cloneable data.
+						const plainPost: TumblrPost = JSON.parse(JSON.stringify(meta.post));
 						const existing = await getCachedPostById(meta.postId);
 						if (!existing) {
 							await putCachedPostEntry(meta.postId, freshEntry(plainPost, meta.blogName));
