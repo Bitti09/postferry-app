@@ -19,7 +19,9 @@ function toVariant(m: MediaItem, video = false): MediaVariant {
 
 /** Rank a rendition: originals first, then non-cropped, then area, then HD. */
 function variantRank(v: MediaVariant): number {
-	return (v.original ? 8 : 0) + (v.cropped ? 0 : 2) + (v.hd ? 1 : 0);
+	// A rendition the CDN will 404 must lose to ANY live rendition.
+	const dead = isCacheableMediaUrl(v.url) ? 0 : -100;
+	return dead + (v.original ? 8 : 0) + (v.cropped ? 0 : 2) + (v.hd ? 1 : 0);
 }
 
 function compareVariants(a: MediaVariant, b: MediaVariant): number {
@@ -51,6 +53,19 @@ function allVariants(media?: MediaItem[] | MediaItem | null, video = false): Med
 }
 
 const SIZE_SUFFIX_RE = /^(.*?_)(\d+)(\.([a-zA-Z0-9]+))$/;
+const DEAD_URL_RE = /_(smart\d*|frame\d*)(\.[a-zA-Z0-9]+)?$/i;
+
+/**
+ * Tumblr CDN renditions that are dead on arrival:
+ *  - `_smartN` re-encode previews the API still lists after the original
+ *    was deleted — CDN 404s them.
+ *  - `_frameN` filmstrip scrubbing frames — 404 freely, nothing renders
+ *    them (Slideshow filters filmstrips out of display).
+ */
+export function isCacheableMediaUrl(url: string): boolean {
+	return !DEAD_URL_RE.test(url.split('?')[0]);
+}
+
 
 /**
  * Rewrite a media URL to a smaller rendition for grid display.
@@ -115,7 +130,7 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 	for (const block of blocks ?? []) {
 		if (isImageBlock(block)) {
 			const best = pickBestMedia(block.media);
-			if (best) {
+			if (best && isCacheableMediaUrl(best.url)) {
 				urls.add(best.url);
 				images.add(best.url);
 				variants.set(best.url, allVariants(block.media));
@@ -138,35 +153,34 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 			const posterBest = pickBestMedia(block.poster);
 			const posterUrl = posterBest?.url ?? block.thumbnail_url;
 
-			if (vidUrl) {
+			if (vidUrl && isCacheableMediaUrl(vidUrl)) {
 				urls.add(vidUrl);
 				videos.add(vidUrl);
 				if (vidVariants.length > 0) variants.set(vidUrl, vidVariants);
 			}
-			if (posterUrl) {
+			if (posterUrl && isCacheableMediaUrl(posterUrl)) {
 				urls.add(posterUrl);
 				posters.add(posterUrl);
 				if (posterBest) variants.set(posterUrl, allVariants(block.poster));
 			}
 			if (!primary) primary = posterUrl ?? vidUrl ?? '';
-
-			// Extract filmstrip frames for video preview scrubbing
-			if (block.filmstrip) {
-				const stripArray = toMediaArray(block.filmstrip);
-				for (const frame of stripArray) {
-					if (frame.url) {
-						urls.add(frame.url);
-						filmstrips.add(frame.url);
-					}
-				}
-			}
 		} else if (isLinkBlock(block)) {
 			const posterBest = pickBestMedia(block.poster);
-			if (posterBest) {
+			if (posterBest && isCacheableMediaUrl(posterBest.url)) {
 				urls.add(posterBest.url);
 				images.add(posterBest.url);
 				variants.set(posterBest.url, allVariants(block.poster));
 				if (!primary) primary = posterBest.url;
+			}
+		}
+		// Filmstrip frames deliberately NOT added to `urls`: they are scrubbing
+		// previews the CDN 404s freely, nothing renders them (Slideshow filters
+		// them out), and downloading them burned the cache queue. The
+		// `filmstrips` array is still populated for display-side filtering.
+		if (isVideoBlock(block) && block.filmstrip) {
+			const stripArray = toMediaArray(block.filmstrip);
+			for (const frame of stripArray) {
+				if (frame.url) filmstrips.add(frame.url);
 			}
 		}
 	}

@@ -87,19 +87,20 @@ sw.addEventListener('fetch', (event) => {
 					if (opfsHit) return opfsHit;
 					try {
 						const upstream = rangeHeader
-							? await fetch(event.request)
+							? { response: await fetch(event.request), status: null as number | null }
 							: await fetchMediaWithFallback(targetUrl, event.request);
-						if (upstream && upstream.ok && !rangeHeader) {
+						const res = upstream.response;
+						if (res && res.ok && !rangeHeader) {
 							// Persist the whole video to OPFS, respond from disk so the
 							// client sees a stable non-streaming body.
-							const stored = await writeVideoToOpfs(targetUrl, upstream.clone());
-							broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: upstream.headers.get('content-type') || 'video/mp4' });
+							const stored = await writeVideoToOpfs(targetUrl, res.clone());
+							broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: res.headers.get('content-type') || 'video/mp4' });
 							if (stored) {
 								const fromDisk = await serveVideoFromOpfs(targetUrl, null);
 								if (fromDisk) return fromDisk;
 							}
 						}
-						if (upstream) return upstream;
+						if (res) return res;
 					} catch {
 						return new Response('', { status: 504, statusText: 'Offline' });
 					}
@@ -119,15 +120,20 @@ sw.addEventListener('fetch', (event) => {
 				// Cache miss: fetch the CDN URL directly (Tumblr media hosts send
 				// ACAO: *, so this is a readable cors response) and persist it, so
 				// everything viewed once is offline. Proxy only as fallback.
-				const res = await fetchMediaWithFallback(targetUrl, event.request);
+				const { response: res, status } = await fetchMediaWithFallback(targetUrl, event.request);
 				if (res && res.ok) {
 					const type = res.headers.get('content-type') || '';
 					await mediaCache.put(targetUrl, res.clone());
 					broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
 					return res;
 				}
+				// Propagate the real upstream status (404/403/…) — a dead asset
+				// must not masquerade as "Offline".
 				if (res) return res;
-				return new Response('', { status: 504, statusText: 'Offline' });
+				return new Response('', {
+					status: status ?? 504,
+					statusText: status ? String(status) : 'Offline'
+				});
 			}
 		}
 
@@ -212,20 +218,29 @@ function parseTumblrMediaUrl(url: string) {
  * falling back to the same-origin Node proxy for hosts/content that fails.
  * `rangeRequest` is the original page request when Range streaming is needed.
  */
-async function fetchMediaWithFallback(targetUrl: string, rangeRequest?: Request): Promise<Response | null> {
+async function fetchMediaWithFallback(
+	targetUrl: string,
+	rangeRequest?: Request
+): Promise<{ response: Response | null; status: number | null }> {
 	if (!rangeRequest) {
 		try {
 			const direct = await fetch(targetUrl, { credentials: 'omit' });
-			if (direct.ok) return direct;
+			if (direct.ok) return { response: direct, status: null };
+			// Direct fetch got a definitive upstream answer (404/403/…):
+			// surface it instead of trying the proxy, which would just get
+			// the same status and double the traffic.
+			return { response: direct, status: direct.status };
 		} catch {
-			// fall through to proxy
+			// network failure — fall through to proxy
 		}
 	}
 	try {
 		const proxied = await fetch(rangeRequest ?? `/api/media/proxy?url=${encodeURIComponent(targetUrl)}`);
-		return proxied.ok ? proxied : null;
+		return proxied.ok
+			? { response: proxied, status: null }
+			: { response: proxied, status: proxied.status };
 	} catch {
-		return null;
+		return { response: null, status: null };
 	}
 }
 
@@ -401,8 +416,8 @@ sw.addEventListener('message', (event) => {
 					});
 				}
 
-				const response = await fetchMediaWithFallback(targetUrl);
-				if (response) {
+				const { response, status } = await fetchMediaWithFallback(targetUrl);
+				if (response && response.ok) {
 					const type = response.headers.get('content-type') || '';
 					if (isVideoUrl(targetUrl)) {
 						const stored = await writeVideoToOpfs(targetUrl, response);
@@ -418,7 +433,11 @@ sw.addEventListener('message', (event) => {
 						await broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
 					}
 				} else {
-					await broadcastToClients({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: 'unreachable' });
+					await broadcastToClients({
+						type: 'MEDIA_CACHE_ERROR',
+						url: targetUrl,
+						error: status ? `HTTP ${status}` : 'unreachable'
+					});
 				}
 			} catch (err) {
 				await broadcastToClients({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: String(err) });

@@ -117,7 +117,18 @@ export function cancelQueuedDownload(url: string): void {
 	downloadMeta.delete(url);
 }
 
+/** Dead-asset statuses: retrying can never succeed. */
+const TERMINAL_STATUS_RE = /HTTP (403|404|410)\b/;
+
 function handleFailure(url: string, error: string): void {
+	// Gone is gone — 403/404/410 from the CDN means the asset is deleted or
+	// private. Don't re-queue, don't feed the circuit breaker (one deleted
+	// post shouldn't look like a network outage).
+	if (TERMINAL_STATUS_RE.test(error)) {
+		queued.delete(url);
+		downloadMeta.delete(url);
+		return;
+	}
 	const item = queued.get(url);
 	if (item && item.retries < 3) {
 		// Exponential backoff: re-queue with a deferred eligibility timestamp.
