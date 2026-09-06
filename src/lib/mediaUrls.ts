@@ -50,26 +50,21 @@ function allVariants(media?: MediaItem[] | MediaItem | null, video = false): Med
 		.reverse();
 }
 
-const SIZE_SEGMENT_RE = /^(.*\/)s(\d+)x(\d+)([a-zA-Z0-9_]*)(\/[^/]+)\.([a-zA-Z0-9]+)$/;
 const SIZE_SUFFIX_RE = /^(.*?_)(\d+)(\.([a-zA-Z0-9]+))$/;
 
 /**
- * Rewrite a Tumblr CDN URL to the smallest rendition still >= targetPx on the
- * short edge. Returns the input unchanged when the shape is unknown or the
- * source is already smaller — the original IS the smallest then.
+ * Rewrite a media URL to a smaller rendition for grid display.
+ *
+ * CDN reality (verified live): Tumblr's current `sWxH` segment URLs are
+ * content-hashed per rendition — rewriting the size segment 404s. Only the
+ * legacy `_N.ext` suffix form serves dynamic sizes from the same path.
+ * sWxH URLs therefore pass through unchanged; the CDN rendition the API
+ * returned is used as-is and CSS `object-fit` handles downscaling.
+ *
+ * Returns the input unchanged when the shape is unknown or the source is
+ * already smaller than targetPx.
  */
 export function variantForDisplay(url: string, targetPx: number): string {
-	const seg = url.match(SIZE_SEGMENT_RE);
-	if (seg) {
-		const width = parseInt(seg[2], 10);
-		const height = parseInt(seg[3], 10);
-		const shortEdge = Math.min(width, height) || width;
-		if (shortEdge <= targetPx) return url;
-		const scale = targetPx / shortEdge;
-		const newW = Math.max(1, Math.round(width * scale));
-		const newH = Math.max(1, Math.round(height * scale));
-		return `${seg[1]}s${newW}x${newH}${seg[4]}${seg[5]}.${seg[6]}`;
-	}
 	const suffix = url.match(SIZE_SUFFIX_RE);
 	if (suffix) {
 		const width = parseInt(suffix[2], 10);
