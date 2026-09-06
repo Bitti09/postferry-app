@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { untrack, onMount } from 'svelte';
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from '@lucide/svelte';
 	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls, getPosterUrls } from '$lib/mediaUrls';
 	import { settings } from '$lib/stores/settings';
 	import { requestMediaDownload } from '$lib/stores/downloads';
+	import { cachedMediaUrls } from '../mediaCacheStatus.svelte.ts';
 	import CachedMedia from './CachedMedia.svelte';
 	import type { TumblrPost } from '$lib/types';
 
@@ -11,16 +11,12 @@
 		post,
 		mode = 'normal',
 		onMediaClick,
-		onCachedUrl,
-		autoCacheEnabled = true,
-		preCheckedUrls = []
+		autoCacheEnabled = true
 	} = $props<{
 		post: TumblrPost;
 		mode?: 'normal' | 'cache';
 		onMediaClick?: (post: TumblrPost, mediaUrl?: string) => void;
-		onCachedUrl?: (url: string) => void;
 		autoCacheEnabled?: boolean;
-		preCheckedUrls?: string[];
 	}>();
 
 	let mediaInfo = $derived.by(() => {
@@ -66,29 +62,7 @@
 		mediaFailed = false;
 	});
 
-	let cachedUrls = $state<Set<string>>(new Set());
-
-	$effect(() => {
-		post.id;
-		preCheckedUrls;
-		cachedUrls = new Set(preCheckedUrls);
-	});
-
-	onMount(() => {
-		const onCached = (e: Event) => {
-			const { url } = (e as CustomEvent).detail;
-			if (mediaInfo.allUrls.includes(url)) {
-				const next = new Set(cachedUrls);
-				next.add(url);
-				cachedUrls = next;
-				onCachedUrl?.(url);
-			}
-		};
-		window.addEventListener('tmblr-media-cached', onCached);
-		return () => window.removeEventListener('tmblr-media-cached', onCached);
-	});
-
-	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedUrls.has(u)));
+	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedMediaUrls.has(u)));
 	let postDetailHref = $derived(`/post/${post.blog_name}/${post.id_string || post.id}`);
 	const DETAIL_ZONE_HEIGHT_PX = 132;
 
@@ -130,7 +104,7 @@
 		};
 
 		mediaInfo.allUrls.forEach((url) => {
-			if (!cachedUrls.has(url)) {
+			if (!cachedMediaUrls.has(url)) {
 				requestMediaDownload(url, postMeta);
 			}
 		});
@@ -141,7 +115,9 @@
 		const urls = mediaInfo.allUrls;
 		if (!autoCache || urls.length === 0) return;
 
-		const pending = untrack(() => urls.filter((url) => !cachedUrls.has(url)));
+		// Tracked: re-runs when any of this post's urls enters the offline
+		// cache, so newly visible cards pick up in-flight completions.
+		const pending = urls.filter((url) => !cachedMediaUrls.has(url));
 		if (pending.length === 0) return;
 
 		const postMeta = {

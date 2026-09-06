@@ -19,14 +19,29 @@ const FALLBACK_AVATAR =
 	'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%234b5563"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
 
 interface AvatarMem {
+	blob: Blob;
 	objectUrl: string;
-	blog: string;
-	size: number;
 }
 const avatarMemoryCache = new Map<string, AvatarMem>();
 
 function avatarKey(blogName: string, size: number): string {
 	return `${blogName}_${size}`;
+}
+
+function getAvatarUrl(key: string, blob: Blob): string {
+	const existing = avatarMemoryCache.get(key);
+	if (existing) return existing.objectUrl;
+	const objectUrl = URL.createObjectURL(blob);
+	avatarMemoryCache.set(key, { blob, objectUrl });
+	return objectUrl;
+}
+
+function replaceAvatarUrl(key: string, blob: Blob): string {
+	const existing = avatarMemoryCache.get(key);
+	if (existing) URL.revokeObjectURL(existing.objectUrl);
+	const objectUrl = URL.createObjectURL(blob);
+	avatarMemoryCache.set(key, { blob, objectUrl });
+	return objectUrl;
 }
 
 async function findBestAvatar(blogName: string): Promise<{ key: string; size: number } | null> {
@@ -48,13 +63,13 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 		best = await findBestAvatar(blogName);
 		if (best && best.size >= size) {
 			const entry = await db.avatars.get(best.key);
-			if (entry?.blob) return avatarMemoryCache.get(best.key)?.objectUrl ?? URL.createObjectURL(entry.blob);
+			if (entry?.blob) return getAvatarUrl(best.key, entry.blob);
 		}
 
 		if (!navigator.onLine) {
 			if (best) {
 				const entry = await db.avatars.get(best.key);
-				if (entry?.blob) return URL.createObjectURL(entry.blob);
+				if (entry?.blob) return getAvatarUrl(best.key, entry.blob);
 			}
 			return FALLBACK_AVATAR;
 		}
@@ -66,7 +81,7 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 			console.warn(`[Rate Limit] Avatar fetch for ${blogName} hit 429. Using fallback.`);
 			if (best) {
 				const entry = await db.avatars.get(best.key);
-				if (entry?.blob) return URL.createObjectURL(entry.blob);
+				if (entry?.blob) return getAvatarUrl(best.key, entry.blob);
 			}
 			return FALLBACK_AVATAR;
 		}
@@ -77,12 +92,12 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 		if (best && best.key !== avatarKey(blogName, size)) {
 			await db.avatars.delete(best.key);
 		}
-		return URL.createObjectURL(blob);
+		return replaceAvatarUrl(avatarKey(blogName, size), blob);
 	} catch (e) {
 		if (best) {
 			try {
 				const entry = await db.avatars.get(best.key);
-				if (entry?.blob) return URL.createObjectURL(entry.blob);
+				if (entry?.blob) return getAvatarUrl(best.key, entry.blob);
 			} catch {}
 		}
 		return FALLBACK_AVATAR;

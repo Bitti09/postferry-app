@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 import type { TumblrPost } from '$lib/types';
 import { db } from './newDb';
+import { cachedMediaUrls, dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 
 export interface BlobPostMeta {
 	id: number;
@@ -23,7 +24,7 @@ export interface MediaRef { url: string; type: string; size: number }
 
 const CACHE_NAME = 'tmblr-media';
 
-async function getMediaCache(): Promise<Cache | null> {
+export async function getMediaCache(): Promise<Cache | null> {
 	if (!browser || !window.caches) return null;
 	return await caches.open(CACHE_NAME);
 }
@@ -40,16 +41,33 @@ export async function bulkIsMediaCached(urls: ReadonlyArray<string>): Promise<Se
 	const cached = new Set<string>();
 	if (!browser || urls.length === 0) return cached;
 	const unique = [...new Set(urls.filter(Boolean))];
+
+	// Fast path: the global registry is warmed from cache.keys() at app start
+	// and updated on every cache completion, so most URLs never touch the
+	// Cache API again.
+	for (const url of unique) {
+		if (cachedMediaUrls.has(url)) cached.add(url);
+	}
+
+	const unknown = unique.filter((url) => !cached.has(url));
+	if (unknown.length === 0) return cached;
+
 	const cache = await getMediaCache();
 	if (!cache) return cached;
-	
-	// Cache API doesn't have bulk match, so we Promise.all over all keys
-	await Promise.all(unique.map(async (url) => {
-		if (await cache.match(url)) {
-			cached.add(url);
-		}
-	}));
-	
+
+	// Cache API has no bulk match; chunk the fan-out so a 10k-url page load
+	// doesn't open 10k concurrent IDB-backed lookups.
+	const CHUNK = 64;
+	for (let i = 0; i < unknown.length; i += CHUNK) {
+		const chunk = unknown.slice(i, i + CHUNK);
+		await Promise.all(chunk.map(async (url) => {
+			if (await cache.match(url)) {
+				cached.add(url);
+				cachedMediaUrls.add(url);
+			}
+		}));
+	}
+
 	return cached;
 }
 
@@ -100,6 +118,7 @@ export async function gcOrphanBlobs(validPostIds: ReadonlySet<number>): Promise<
 	if (cache) {
 		for (const url of orphans) {
 			if (await cache.delete(url)) deletedBlobs++;
+			dropCachedUrl(url);
 		}
 	}
 	

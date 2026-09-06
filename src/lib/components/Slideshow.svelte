@@ -1,8 +1,26 @@
 <script lang="ts">
 	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { extractMedia as extractPostMedia } from '$lib/mediaUrls';
-	import { onDestroy } from 'svelte';
+	import { onDestroy as svelteOnDestroy } from 'svelte';
 	import CachedMedia from './CachedMedia.svelte';
+	import { upscaleImage } from '$lib/upscaleImage';
+
+	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
+
+	function renderCanvas(node: HTMLCanvasElement, srcCanvas: HTMLCanvasElement | null): { update: (s: HTMLCanvasElement | null) => void } {
+		function draw(src: HTMLCanvasElement | null) {
+			if (!src) return;
+			if (node.width !== src.width || node.height !== src.height) {
+				node.width = src.width;
+				node.height = src.height;
+			}
+			const ctx = node.getContext('2d')!;
+			ctx.clearRect(0, 0, node.width, node.height);
+			ctx.drawImage(src, 0, 0);
+		}
+		draw(srcCanvas);
+		return { update: draw };
+	}
 
 	let {
 		active = $bindable(false),
@@ -87,8 +105,43 @@
 	let isFetchingMore = $state(false);
 	let loadCount = $state(0);
 	let fitToScreen = $state(true);
+	let upscaledCanvas = $state<HTMLCanvasElement | null>(null);
+	let upscaleLoading = $state(false);
+	let upscalingForUrl = $state<string | null>(null);
 
 	let currentItem = $derived(flatMedia[currentIndex]);
+
+	$effect(() => {
+		const item = currentItem;
+		const doFit = fitToScreen;
+		const isGif = item?.url.toLowerCase().includes('.gif');
+		if (!item || item.isVideo || isGif || !doFit) {
+			upscaledCanvas = null;
+			upscalingForUrl = null;
+			upscaleLoading = false;
+			return;
+		}
+		if (upscalingForUrl === item.url) return;
+		upscalingForUrl = item.url;
+		upscaleLoading = true;
+		const url = item.url;
+		const proxyUrl = toProxyUrl(url);
+		const vw = window.innerWidth - 32;
+		const vh = window.innerHeight - 128;
+		upscaleImage(proxyUrl, vw, vh)
+			.then((result) => {
+				if (upscalingForUrl === url) {
+					upscaledCanvas = result ? result.canvas : null;
+					upscaleLoading = false;
+				}
+			})
+			.catch(() => {
+				if (upscalingForUrl === url) {
+					upscaledCanvas = null;
+					upscaleLoading = false;
+				}
+			});
+	});
 
 	$effect(() => {
 		if (active && currentItem && currentItem.post) {
@@ -147,16 +200,11 @@
 	});
 
 	async function next() {
-		if (currentIndex < flatMedia.length - 1) {
-			currentIndex++;
-			checkPrefetch();
-		}
+		if (currentIndex < flatMedia.length - 1) { currentIndex++; checkPrefetch(); }
 	}
 
 	function prev() {
-		if (currentIndex > 0) {
-			currentIndex--;
-		}
+		if (currentIndex > 0) currentIndex--;
 	}
 
 	function close() {
@@ -280,13 +328,31 @@
 			{#if flatMedia.length === 0}
 				<Loader2 size={48} class="text-white animate-spin" />
 			{:else if currentItem}
-				<CachedMedia 
-					url={currentItem.url}
-					type={currentItem.isVideo ? 'video/mp4' : 'image/jpeg'}
-					class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg"
-					autoplay={currentItem.isVideo}
-					post={currentItem.post}
-				/>
+				{#if currentItem.isVideo}
+					<CachedMedia
+						url={currentItem.url}
+						type="video/mp4"
+						class="w-full h-full object-contain drop-shadow-2xl rounded-lg"
+						autoplay
+						post={currentItem.post}
+					/>
+				{:else if fitToScreen && upscaleLoading}
+					<div class="flex items-center justify-center">
+						<Loader2 size={36} class="text-white animate-spin" />
+					</div>
+				{:else if fitToScreen && upscaledCanvas}
+					<canvas
+						use:renderCanvas={upscaledCanvas}
+						class="max-w-full max-h-full object-contain drop-shadow-2xl rounded-lg"
+					></canvas>
+				{:else}
+					<img
+						src={toProxyUrl(currentItem.url)}
+						alt=""
+						class="{fitToScreen ? 'w-full h-full' : 'max-w-full max-h-full'} object-contain drop-shadow-2xl rounded-lg"
+						style={fitToScreen ? '' : 'width: auto; height: auto; display: block;'}
+					/>
+				{/if}
 			{/if}
 		</div>
 

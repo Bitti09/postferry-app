@@ -3,11 +3,10 @@
 	import { browser } from '$app/environment';
 	import { settings } from '$lib/stores/settings';
 	import { accounts, accountsReady } from '$lib/stores/accounts';
-	import { bulkIsMediaCached, bulkSetPosts } from '$lib/cache';
+	import { bulkSetPosts } from '$lib/cache';
 	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
 	import { cacheAllVisible } from '$lib/cacheUtils';
 	import { filterPosts, type PostFilter } from '$lib/postFilter';
-	import { getAllMediaUrls } from '$lib/mediaUrls';
 	import PostCard from '$lib/components/PostCard.svelte';
 	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
 	import Slideshow from '$lib/components/Slideshow.svelte';
@@ -148,28 +147,6 @@
 	
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
-	let cachedUrlSet = $state<Set<string>>(new Set());
-	let cachedUrlsReady = $state(false);
-
-	$effect(() => {
-		const urls = filteredPosts.flatMap(p => getAllMediaUrls(p));
-		if (urls.length === 0) {
-			cachedUrlSet = new Set();
-			cachedUrlsReady = true;
-			return;
-		}
-	
-		bulkIsMediaCached(urls).then(found => {
-			cachedUrlSet = new Set([...cachedUrlSet, ...found]);
-			cachedUrlsReady = true;
-		}).catch(() => {
-			cachedUrlsReady = true;
-		});
-	});
-
-	// Final cached URLs for PostCard consumption
-	let cachedUrlsFinal = $derived(cachedUrlsReady ? Array.from(cachedUrlSet) : []);
-
 	async function startCacheAll() {
 		if (downloadingAll) return;
 		downloadingAll = true;
@@ -181,11 +158,6 @@
 		slideshowStartPostId = post?.id ?? null;
 		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
-	}
-
-	function handleCardCachedUrl(url: string) {
-		if (cachedUrlSet.has(url)) return;
-		cachedUrlSet = new Set([...cachedUrlSet, url]);
 	}
 
 	async function loadPosts(reset = false) {
@@ -481,7 +453,7 @@
 									>
 										{#each rowItem.posts as post (post.id)}
 											<div id={"post-" + post.id}>
-												<PostCard {post} preCheckedUrls={cachedUrlsFinal} onMediaClick={openSlideshowFromPost} onCachedUrl={handleCardCachedUrl} />
+												<PostCard {post} onMediaClick={openSlideshowFromPost} />
 											</div>
 										{/each}
 									</div>

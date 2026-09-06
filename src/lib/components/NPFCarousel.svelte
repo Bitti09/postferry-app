@@ -1,6 +1,9 @@
 <script lang="ts">
 	let { images = [] } = $props<{ images: any[] }>();
 	
+	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
+	const proxied = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? toProxyUrl(u) : u);
+
 	let currentSlide = $state(0);
 	let lightboxUrl = $state<string | null>(null);
 
@@ -38,7 +41,7 @@
 	{#if imgUrl}
 		<button type="button" class="rounded-xl overflow-hidden shadow-2xl bg-gray-800 my-4 cursor-zoom-in text-left w-full" onclick={() => openLightbox(imgUrl)}>
 			<img 
-				src={imgUrl} 
+				src={proxied(imgUrl)} 
 				alt="Post content" 
 				class="w-full max-h-[90vh] object-contain block mx-auto"
 				loading="lazy"
@@ -60,7 +63,7 @@
 					onclick={() => { currentSlide = i; openLightbox(imgUrl); }}
 				>
 					<img 
-						src={imgUrl} 
+						src={proxied(imgUrl)} 
 						alt={`Image ${i + 1}`} 
 						class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
 						loading={i < 4 ? "eager" : "lazy"}
@@ -86,7 +89,7 @@
 			aria-label="Close lightbox"
 		></button>
 		<img 
-			src={lightboxUrl} 
+			src={proxied(lightboxUrl)} 
 			alt="Fullscreen" 
 			class="w-screen h-screen object-contain select-none"
 		/>

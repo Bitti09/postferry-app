@@ -1,5 +1,5 @@
 node_modules
-
+.omo
 # Editor / tool caches
 .dirac-cache/
 
@@ -29,3 +29,4 @@ vite.config.ts.timestamp-*
 .opencode/
 dev.err
 dev.out
+dev-smoke.out
