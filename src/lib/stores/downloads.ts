@@ -221,6 +221,27 @@ if (browser && navigator.serviceWorker) {
 	});
 }
 
+// Requests parked while the SW controller is not yet active. Flushed once,
+// in park order, when the controller appears.
+const controllerWaiters = new Map<string, SlimMediaMeta>();
+let controllerWaitArmed = false;
+
+function armControllerWait(): void {
+	if (controllerWaitArmed || !browser) return;
+	const sw = navigator.serviceWorker;
+	if (!sw) return;
+	controllerWaitArmed = true;
+	sw.addEventListener('controllerchange', () => {
+		controllerWaitArmed = false;
+		// Re-dispatch every parked request in original order.
+		const parked = [...controllerWaiters.entries()];
+		controllerWaiters.clear();
+		for (const [url, meta] of parked) {
+			requestMediaDownload(url, meta);
+		}
+	});
+}
+
 export function requestMediaDownload(
 	url: string,
 	meta: SlimMediaMeta,
@@ -232,9 +253,14 @@ export function requestMediaDownload(
 	if (cachedMediaUrls.has(url)) return;
 	if (queued.has(url) || inFlight.has(url)) return;
 
-	// Wait for SW controller to be active
+	// SW not controlling yet (first load before clients.claim, or
+	// registration still settling): park the request and retry once the
+	// controller appears, instead of dropping the work with a warning.
 	if (!navigator.serviceWorker?.controller) {
-		console.warn('Cannot download media: Service Worker not controlling the page.');
+		if (!controllerWaiters.has(url)) {
+			controllerWaiters.set(url, meta);
+			armControllerWait();
+		}
 		return;
 	}
 
