@@ -1,45 +1,52 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { forAccounts, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
+interface TumblrError extends Error {
+	statusCode?: number;
+}
+
+/**
+ * Like/unlike a post. Accepts both the single-account and multi-account
+ * payload shapes; the action is performed by every account that carries
+ * credentials (the UI sends one account per click, batch sends fan out).
+ */
 export const POST: RequestHandler = async ({ request }) => {
 	let action = 'like';
-	try {
-		const { account, postId, reblogKey, action: reqAction } = await request.json();
-		if (reqAction) {
-			action = reqAction;
-		}
+	const accounts = await readAccounts(request);
+	if (!accounts || accounts.length === 0) {
+		return new Response('Missing required parameters', { status: 400 });
+	}
 
-		if (!account || !account.token || !account.secret || !postId || !reblogKey) {
-			return new Response('Missing required parameters', { status: 400 });
-		}
+	const { postId, reblogKey, action: reqAction } = (await request.json()) as {
+		postId?: string | number;
+		reblogKey?: string;
+		action?: string;
+	};
+	if (reqAction) {
+		action = reqAction;
+	}
+	if (!postId || !reblogKey) {
+		return new Response('Missing required parameters', { status: 400 });
+	}
 
-		const client = new Client({
-			consumer_key: TUMBLR_CONSUMER_KEY,
-			consumer_secret: TUMBLR_CONSUMER_SECRET,
-			token: account.token,
-			token_secret: account.secret
-		});
-
-		await checkRateLimit();
-
-		let responseData;
+	const results = await forAccounts(accounts, async (client) => {
 		if (action === 'unlike') {
-			responseData = await client.unlikePost(postId.toString(), reblogKey);
-		} else {
-			responseData = await client.likePost(postId.toString(), reblogKey);
+			return client.unlikePost(postId.toString(), reblogKey);
 		}
+		return client.likePost(postId.toString(), reblogKey);
+	});
 
-		return new Response(JSON.stringify({ success: true, response: responseData }), {
-			headers: { 'Content-Type': 'application/json' }
-		});
-	} catch (error: any) {
-		console.error(`Tumblr ${action} Error:`, error);
-		const status = error.statusCode || 500;
-		return new Response(error.message || 'Internal Server Error', { 
+	const succeeded = results.filter((r) => r.ok);
+	if (succeeded.length === 0) {
+		const first = results.find((r) => r.error);
+		const status = 502;
+		return new Response(first?.error ?? 'All like actions failed', {
 			status,
 			headers: { 'Content-Type': 'application/json' }
 		});
 	}
+
+	return new Response(JSON.stringify({ success: true, accounts: succeeded.map((r) => r.accountBlogName) }), {
+		headers: { 'Content-Type': 'application/json' }
+	});
 };

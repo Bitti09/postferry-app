@@ -1,41 +1,48 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { clientFor, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
+interface TumblrError extends Error {
+	statusCode?: number;
+}
+
 export const POST: RequestHandler = async ({ request }) => {
-	try {
-		const { account, blogName, before } = await request.json();
+	const accounts = await readAccounts(request);
+	if (!accounts || accounts.length === 0) {
+		return new Response('Invalid account payload', { status: 400 });
+	}
 
-		if (!account || !account.token || !account.secret) {
-			return new Response('Invalid account payload', { status: 400 });
-		}
+	const { blogName, before } = (await request.json()) as {
+		blogName?: string;
+		before?: string | number;
+	};
+	if (!blogName) {
+		return new Response('blogName is required', { status: 400 });
+	}
 
-		const client = new Client({
-			consumer_key: TUMBLR_CONSUMER_KEY,
-			consumer_secret: TUMBLR_CONSUMER_SECRET,
-			token: account.token,
-			token_secret: account.secret
-		});
+	const client = accounts.map(clientFor).find((c) => c !== null);
+	if (!client) {
+		return new Response('No account with valid credentials', { status: 400 });
+	}
 
-		const tryFetch = async (identifier: string) => {
-			const params: any = {
-				npf: true,
-				reblog_info: true,
-				notes_info: true
-			};
-			if (before) {
-				params.before = before.toString();
-			}
-			await checkRateLimit();
-			return client.blogLikes(identifier, params);
+	const tryFetch = async (identifier: string) => {
+		const params: Record<string, unknown> = {
+			npf: true,
+			reblog_info: true,
+			notes_info: true
 		};
+		if (before) {
+			params.before = before.toString();
+		}
+		return client.blogLikes(identifier, params);
+	};
 
+	try {
 		let data;
 		try {
 			data = await tryFetch(blogName);
-		} catch (error: any) {
-			if (error.statusCode === 404 && !blogName.includes('.')) {
+		} catch (error) {
+			const status = (error as TumblrError).statusCode;
+			if (status === 404 && !blogName.includes('.')) {
 				data = await tryFetch(`${blogName}.tumblr.com`);
 			} else {
 				throw error;
@@ -48,9 +55,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error: any) {
-		console.error(`Failed to fetch likes:`, error);
-		const status = error.statusCode || 500;
-		return new Response(error.message || 'Internal Server Error', { status });
+	} catch (error: unknown) {
+		console.error('Failed to fetch likes:', error);
+		const status = (error as TumblrError).statusCode || 500;
+		return new Response(error instanceof Error ? error.message : 'Internal Server Error', { status });
 	}
 };

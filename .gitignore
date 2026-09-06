@@ -30,3 +30,4 @@ vite.config.ts.timestamp-*
 dev.err
 dev.out
 dev-smoke.out
+dev-smoke.err

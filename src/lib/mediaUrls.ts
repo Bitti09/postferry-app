@@ -1,41 +1,95 @@
-import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, LinkBlock } from '$lib/types';
-import type { MediaExtraction } from '$lib/types';
+import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, LinkBlock, MediaExtraction, MediaVariant } from '$lib/types';
 
 function toMediaArray(media?: MediaItem[] | MediaItem | null): MediaItem[] {
 	if (!media) return [];
 	return Array.isArray(media) ? media : [media];
 }
 
+function toVariant(m: MediaItem, video = false): MediaVariant {
+	return {
+		url: m.url,
+		width: m.width ?? 0,
+		height: m.height ?? 0,
+		original: !!m.has_original_dimensions && !m.cropped,
+		hd: !!m.hd,
+		cropped: !!m.cropped,
+		video: video || undefined
+	};
+}
+
+/** Rank a rendition: originals first, then non-cropped, then area, then HD. */
+function variantRank(v: MediaVariant): number {
+	return (v.original ? 8 : 0) + (v.cropped ? 0 : 2) + (v.hd ? 1 : 0);
+}
+
+function compareVariants(a: MediaVariant, b: MediaVariant): number {
+	const ra = variantRank(a);
+	const rb = variantRank(b);
+	if (ra !== rb) return ra - rb;
+	return a.width * a.height - b.width * b.height;
+}
+
 /** Select the highest-quality media URL from a media array. */
 function pickBestMediaUrl(media?: MediaItem[] | MediaItem | null): string | null {
-	const mediaArray = toMediaArray(media);
+	return pickBestMedia(media)?.url ?? null;
+}
+
+function pickBestMedia(media?: MediaItem[] | MediaItem | null): MediaVariant | null {
+	const mediaArray = toMediaArray(media).filter(m => m.url);
 	if (!mediaArray.length) return null;
+	const variants = mediaArray.map(m => toVariant(m));
+	return variants.reduce((best, v) => (compareVariants(v, best) > 0 ? v : best));
+}
 
-	// 1. Look for the guaranteed original
-	const original = mediaArray.find(m => m.has_original_dimensions && !m.cropped);
-	if (original) return original.url ?? null;
+/** All renditions of a media array, best first. */
+function allVariants(media?: MediaItem[] | MediaItem | null, video = false): MediaVariant[] {
+	return toMediaArray(media)
+		.filter(m => m.url)
+		.map(m => toVariant(m, video))
+		.sort(compareVariants)
+		.reverse();
+}
 
-	// 2. Filter out cropped thumbnails
-	let candidates = mediaArray.filter(m => !m.cropped);
-	if (!candidates.length) candidates = mediaArray; // fallback if everything is cropped
+const SIZE_SEGMENT_RE = /^(.*\/)s(\d+)x(\d+)([a-zA-Z0-9_]*)(\/[^/]+)\.([a-zA-Z0-9]+)$/;
+const SIZE_SUFFIX_RE = /^(.*?_)(\d+)(\.([a-zA-Z0-9]+))$/;
 
-	// 3. Evaluate based on explicit HD flag or largest area
-	let best = candidates[0];
-	for (let i = 1; i < candidates.length; i++) {
-		const m = candidates[i];
-		if (m.hd && !best.hd) {
-			best = m;
-			continue;
-		}
-		
-		const currentArea = (m.width || 0) * (m.height || 0);
-		const bestArea = (best.width || 0) * (best.height || 0);
-		if (currentArea > bestArea) {
-			best = m;
-		}
+/**
+ * Rewrite a Tumblr CDN URL to the smallest rendition still >= targetPx on the
+ * short edge. Returns the input unchanged when the shape is unknown or the
+ * source is already smaller — the original IS the smallest then.
+ */
+export function variantForDisplay(url: string, targetPx: number): string {
+	const seg = url.match(SIZE_SEGMENT_RE);
+	if (seg) {
+		const width = parseInt(seg[2], 10);
+		const height = parseInt(seg[3], 10);
+		const shortEdge = Math.min(width, height) || width;
+		if (shortEdge <= targetPx) return url;
+		const scale = targetPx / shortEdge;
+		const newW = Math.max(1, Math.round(width * scale));
+		const newH = Math.max(1, Math.round(height * scale));
+		return `${seg[1]}s${newW}x${newH}${seg[4]}${seg[5]}.${seg[6]}`;
 	}
-	
-	return best.url ?? null;
+	const suffix = url.match(SIZE_SUFFIX_RE);
+	if (suffix) {
+		const width = parseInt(suffix[2], 10);
+		if (width <= targetPx) return url;
+		return `${suffix[1]}${targetPx}${suffix[3]}`;
+	}
+	return url;
+}
+
+/**
+ * Resolve the true best source (highest resolution rendition) for a display
+ * URL, using the extraction's variant table. Falls back to the display URL —
+ * if we recorded no variants, what we had IS the best we know.
+ */
+export function bestSourceFor(displayUrl: string, extraction: MediaExtraction): MediaVariant {
+	const variants = extraction.variants.get(displayUrl);
+	if (!variants || variants.length === 0) {
+		return { url: displayUrl, width: 0, height: 0, original: false, hd: false, cropped: false };
+	}
+	return variants[0];
 }
 
 /** Type guard for image blocks */
@@ -60,59 +114,67 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 	const images = new Set<string>();
 	const posters = new Set<string>();
 	const filmstrips = new Set<string>();
+	const variants = new Map<string, MediaVariant[]>();
 	let primary = '';
 
 	for (const block of blocks ?? []) {
-			if (isImageBlock(block)) {
-				const url = pickBestMediaUrl(block.media);
-				if (url) {
-					urls.add(url);
-					images.add(url);
-					if (!primary) primary = url;
-				}
-			} else if (isVideoBlock(block)) {
-				const isNative = !block.provider || block.provider === 'tumblr';
-				let vidUrl: string | null = null;
-				
-				if (isNative) {
-					// Native video: attempt to follow NPF waterfall for playable MP4s
-					vidUrl = pickBestMediaUrl(block.media) ?? 
-							 block.embed_url ?? 
-							 block.embed_iframe?.url ?? 
-							 block.url ?? null;
-				}
-				
-				const posterUrl = pickBestMediaUrl(block.poster) ?? block.thumbnail_url;
-				
-				if (vidUrl) {
-					urls.add(vidUrl);
-					videos.add(vidUrl);
-				}
-				if (posterUrl) {
-					urls.add(posterUrl);
-					posters.add(posterUrl);
-				}
-				if (!primary) primary = posterUrl ?? vidUrl ?? '';
+		if (isImageBlock(block)) {
+			const best = pickBestMedia(block.media);
+			if (best) {
+				urls.add(best.url);
+				images.add(best.url);
+				variants.set(best.url, allVariants(block.media));
+				if (!primary) primary = best.url;
+			}
+		} else if (isVideoBlock(block)) {
+			const isNative = !block.provider || block.provider === 'tumblr';
+			let vidUrl: string | null = null;
+			let vidVariants: MediaVariant[] = [];
 
-				// Extract filmstrip frames for video preview scrubbing
-				if (block.filmstrip) {
-					const stripArray = toMediaArray(block.filmstrip);
-					for (const frame of stripArray) {
-						if (frame.url) {
-							urls.add(frame.url);
-							filmstrips.add(frame.url);
-						}
+			if (isNative) {
+				// Native video: attempt to follow NPF waterfall for playable MP4s
+				vidUrl = pickBestMediaUrl(block.media) ??
+						 block.embed_url ??
+						 block.embed_iframe?.url ??
+						 block.url ?? null;
+				vidVariants = allVariants(block.media, true);
+			}
+
+			const posterBest = pickBestMedia(block.poster);
+			const posterUrl = posterBest?.url ?? block.thumbnail_url;
+
+			if (vidUrl) {
+				urls.add(vidUrl);
+				videos.add(vidUrl);
+				if (vidVariants.length > 0) variants.set(vidUrl, vidVariants);
+			}
+			if (posterUrl) {
+				urls.add(posterUrl);
+				posters.add(posterUrl);
+				if (posterBest) variants.set(posterUrl, allVariants(block.poster));
+			}
+			if (!primary) primary = posterUrl ?? vidUrl ?? '';
+
+			// Extract filmstrip frames for video preview scrubbing
+			if (block.filmstrip) {
+				const stripArray = toMediaArray(block.filmstrip);
+				for (const frame of stripArray) {
+					if (frame.url) {
+						urls.add(frame.url);
+						filmstrips.add(frame.url);
 					}
 				}
-			} else if (isLinkBlock(block)) {
-				const posterUrl = pickBestMediaUrl(block.poster);
-				if (posterUrl) {
-					urls.add(posterUrl);
-					images.add(posterUrl);
-					if (!primary) primary = posterUrl;
-				}
+			}
+		} else if (isLinkBlock(block)) {
+			const posterBest = pickBestMedia(block.poster);
+			if (posterBest) {
+				urls.add(posterBest.url);
+				images.add(posterBest.url);
+				variants.set(posterBest.url, allVariants(block.poster));
+				if (!primary) primary = posterBest.url;
 			}
 		}
+	}
 
 	return {
 		urls: [...urls],
@@ -120,7 +182,8 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 		images: [...images],
 		posters: [...posters],
 		filmstrips: [...filmstrips],
-		primary
+		primary,
+		variants
 	};
 }
 
@@ -131,14 +194,19 @@ function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 	const videos = new Set<string>();
 	const posters = new Set<string>();
 	const filmstrips = new Set<string>();
+	const variants = new Map<string, MediaVariant[]>();
 	let primary = '';
 
 	if (post.type === 'photo' && post.photos) {
 		for (const photo of post.photos) {
-			const url = photo.original_size?.url;
+			const altSizes = [...(photo.alt_sizes ?? []), ...(photo.original_size ? [photo.original_size] : [])];
+			const renditions = allVariants(altSizes);
+			const best = pickBestMedia(altSizes) ?? pickBestMedia(photo.original_size);
+			const url = best?.url ?? photo.original_size?.url;
 			if (url) {
 				urls.add(url);
 				images.add(url);
+				if (renditions.length > 0) variants.set(url, renditions);
 				if (!primary) primary = url;
 			}
 		}
@@ -183,35 +251,20 @@ function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 		videos: [...videos],
 		posters: [...posters],
 		filmstrips: [...filmstrips],
-		primary
+		primary,
+		variants
 	};
 }
 
-/** Generate a cache key for a post based on its immutable identifiers. */
-function getMediaKey(post: TumblrPost): string {
-	return `${post.id}:${post.timestamp}:${post.body?.length ?? 0}`;
-}
-
-/** Simple LRU cache for extraction results (max 500 entries). */
-const extractionCache = new Map<string, MediaExtraction>();
-const MAX_CACHE_SIZE = 500;
-
-function setCached(key: string, value: MediaExtraction): void {
-	if (extractionCache.size >= MAX_CACHE_SIZE) {
-		const firstKey = extractionCache.keys().next().value;
-		firstKey && extractionCache.delete(firstKey);
-	}
-	extractionCache.set(key, value);
-}
+/** Memoized per post object — auto-GC'd with the post, no size cap needed. */
+const extractionCache = new WeakMap<TumblrPost, MediaExtraction>();
 
 /**
  * Extract all media URLs from a Tumblr post (NPF + legacy + reblog trail).
  * Results are memoized to avoid re-scanning during render passes.
  */
 export function extractMedia(post: TumblrPost): MediaExtraction {
-	const key = getMediaKey(post);
-
-	const cached = extractionCache.get(key);
+	const cached = extractionCache.get(post);
 	if (cached) return cached;
 
 	// NPF content blocks
@@ -226,7 +279,8 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 			images: [...new Set([...result.images, ...trailResult.images])],
 			posters: [...new Set([...result.posters, ...trailResult.posters])],
 			filmstrips: [...new Set([...result.filmstrips, ...trailResult.filmstrips])],
-			primary: result.primary || trailResult.primary
+			primary: result.primary || trailResult.primary,
+			variants: new Map([...result.variants, ...trailResult.variants])
 		};
 	}
 
@@ -250,10 +304,11 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 		images: result.images.filter(Boolean),
 		posters: result.posters.filter(Boolean),
 		filmstrips: result.filmstrips.filter(Boolean),
-		primary: preferredPrimary
+		primary: preferredPrimary,
+		variants: result.variants
 	};
 
-	setCached(key, cleaned);
+	extractionCache.set(post, cleaned);
 	return cleaned;
 }
 
@@ -282,7 +337,3 @@ export function getPosterUrls(post: TumblrPost): string[] {
 	return extractMedia(post).posters;
 }
 
-/** Clear the extraction cache (useful for testing or memory pressure). */
-export function clearMediaExtractionCache(): void {
-	extractionCache.clear();
-}

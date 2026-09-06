@@ -1,25 +1,35 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { clientFor, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
+interface TumblrError extends Error {
+	statusCode?: number;
+}
+
 export const POST: RequestHandler = async ({ request }) => {
+	const accounts = await readAccounts(request);
+	if (!accounts || accounts.length === 0) {
+		return new Response('Invalid account payload', { status: 400 });
+	}
+
+	const { blogName, postId, before_timestamp, before, npf } = (await request.json()) as {
+		blogName?: string;
+		postId?: string | number;
+		before_timestamp?: string | number;
+		before?: string | number;
+		npf?: boolean;
+	};
+
+	if (!blogName || !postId) {
+		return new Response('blogName and postId are required', { status: 400 });
+	}
+
+	const client = accounts.map(clientFor).find((c) => c !== null);
+	if (!client) {
+		return new Response('No account with valid credentials', { status: 400 });
+	}
+
 	try {
-		const { account, blogName, postId, before_timestamp, before, npf } = await request.json();
-
-		if (!account || !account.token || !account.secret) {
-			return new Response('Invalid account payload', { status: 400 });
-		}
-
-		const client = new Client({
-			consumer_key: TUMBLR_CONSUMER_KEY,
-			consumer_secret: TUMBLR_CONSUMER_SECRET,
-			token: account.token,
-			token_secret: account.secret
-		});
-
-		await checkRateLimit();
-		const params: any = {
+		const params: Record<string, unknown> = {
 			id: postId.toString(),
 			notes_info: true,
 			reblog_info: true,
@@ -32,7 +42,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const data = await client.blogPosts(blogName, params);
 
 		const post = data.posts?.[0];
-		return new Response(JSON.stringify({ 
+		return new Response(JSON.stringify({
 			post: beforeCursor ? undefined : post,
 			notes: post?.notes || [],
 			liked: post?.liked ?? false,
@@ -40,16 +50,16 @@ export const POST: RequestHandler = async ({ request }) => {
 		}), {
 			headers: { 'Content-Type': 'application/json' }
 		});
-	} catch (error: any) {
-		console.error(`Failed to fetch post detail:`, error);
-		const status = error.statusCode || 500;
-		let errorMessage = error.message || 'Error fetching post from Tumblr';
+	} catch (error: unknown) {
+		console.error('Failed to fetch post detail:', error);
+		const status = (error as TumblrError).statusCode || 500;
+		let errorMessage = (error instanceof Error ? error.message : '') || 'Error fetching post from Tumblr';
 		if (status === 404) {
 			errorMessage = 'This post could not be found. It may have been deleted or the blog may be private.';
 		}
-		return new Response(JSON.stringify({ error: errorMessage }), { 
-			status, 
-			headers: { 'Content-Type': 'application/json' } 
+		return new Response(JSON.stringify({ error: errorMessage }), {
+			status,
+			headers: { 'Content-Type': 'application/json' }
 		});
 	}
 };

@@ -118,16 +118,18 @@
 				</div>
 			{/if}
 		{:else}
-			<video
-				src={srcUrl}
-				poster={resolvedPosterUrl}
-				class={className}
-				{style}
-				controls
-				{autoplay}
-				preload="metadata"
-				onerror={handleError}
-			></video>
+		<video
+			src={srcUrl}
+			poster={resolvedPosterUrl}
+			class={className}
+			{style}
+			controls
+			{autoplay}
+			muted={autoplay}
+			playsinline
+			preload="metadata"
+			onerror={handleError}
+		></video>
 		{/if}
 	{:else}
 		{#if mediaUnavailable && !isDownloading}

@@ -20,7 +20,8 @@ export interface CacheProgress { done: number; total: number }
  */
 export async function cacheAllVisible(
 	posts: TumblrPost[],
-	onProgress?: (progress: CacheProgress) => void
+	onProgress?: (progress: CacheProgress) => void,
+	priority: 'visible' | 'prefetch' | 'bulk' = 'bulk'
 ): Promise<void> {
 	if (posts.length === 0) {
 		onProgress?.({ done: 0, total: 0 });
@@ -63,7 +64,7 @@ export async function cacheAllVisible(
 
 	const items = toDownload.map((url) => ({ url, meta: urlMeta.get(url)! }));
 	for (const item of items) {
-		requestMediaDownload(item.url, item.meta);
+		requestMediaDownload(item.url, item.meta, priority);
 	}
 
 	// A bulk cache may push the cache past its caps — run eviction shortly

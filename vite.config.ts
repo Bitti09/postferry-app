@@ -3,19 +3,19 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
     plugins: [
         tailwindcss(),
         sveltekit(),
         SvelteKitPWA({
             srcDir: './src',
-            mode: 'development',
+            mode: mode === 'production' ? ('production' as const) : ('development' as const),
             strategies: 'injectManifest',
             filename: 'service-worker.ts',
             registerType: 'autoUpdate',
             injectRegister: 'auto',
             devOptions: {
-                enabled: true,
+                enabled: mode === 'development',
                 type: 'module'
             },
             injectManifest: {
@@ -59,4 +59,4 @@ export default defineConfig({
             }
         })
     ],
-});
+}));

@@ -234,13 +234,8 @@
 					likes = [...likes, ...uniqueNew];
 					accountOffsets = { ...accountOffsets, ...newBefore };
 					
-					const likeUpdates: Record<string, Record<string, boolean>> = {};
-					for (const r of data.accountResponses || []) {
-						for (const p of r.liked_posts || []) {
-							if (!likeUpdates[p.id]) likeUpdates[p.id] = {};
-							likeUpdates[p.id][r.accountBlogName] = true;
-						}
-					}
+					const likeUpdates: Record<string, Record<string, boolean>> =
+						data.likeUpdates ?? {};
 					
 					void bulkSetPosts(uniqueNew, {
 						likedBy: likeUpdates

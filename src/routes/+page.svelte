@@ -29,6 +29,7 @@
 	let loading = $state(false);
 	let hasMore = $state(true);
 	let accountOffsets: Record<string, string> = $state({});
+	let newestSinceIds: Record<string, string> = $state({});
 	let error = $state('');
 	let isOffline = $state(false);
 	let downloadingAll = $state(false);
@@ -160,7 +161,7 @@
 		slideshowActive = true;
 	}
 
-	async function loadPosts(reset = false) {
+	async function loadPosts(reset = false, topUp = false) {
 		if (activeAccounts.length === 0) {
 			posts = [];
 			loading = false;
@@ -186,6 +187,7 @@
 
 		if (reset) {
 			accountOffsets = {};
+			newestSinceIds = {};
 			posts = [];
 			hasMore = true;
 		}
@@ -198,7 +200,10 @@
 				body: JSON.stringify({
 					accounts: activeAccounts,
 					offsets: accountOffsets,
-					type: currentFilter === 'all' ? null : currentFilter
+					type: currentFilter === 'all' ? null : currentFilter,
+					// Top-up refresh: only fetch posts newer than the newest we
+					// already hold, instead of re-pulling page 1 for every account.
+					since_id: topUp ? newestSinceIds[topKey()] : undefined
 				})
 			});
 
@@ -206,10 +211,11 @@
 
 			const data = await res.json();
 			const newPosts: TumblrPost[] = data.posts;
-			const newOffsets = data.newOffsets;
+			const newSinceIds: Record<string, string> = data.newSinceIds ?? {};
+			const newOffsets: Record<string, string> = data.newOffsets ?? {};
 
 			if (newPosts.length === 0) {
-				hasMore = false;
+				if (!topUp) hasMore = false;
 			} else {
 				const existingIds = new Set(posts.map((p) => p.id));
 				const uniqueNewPosts = newPosts.filter((p) => !existingIds.has(p.id));
@@ -217,10 +223,19 @@
 				if (uniqueNewPosts.length === 0 && newPosts.length > 0) {
 					// Duplicates, continue if more pages
 				} else if (uniqueNewPosts.length === 0) {
-					hasMore = false;
+					if (!topUp) hasMore = false;
+				} else if (topUp) {
+					// New posts land on top, deduping against what we have.
+					posts = [...uniqueNewPosts, ...posts];
+					for (const [k, v] of Object.entries(newSinceIds)) {
+						newestSinceIds[k] = v;
+					}
 				} else {
 					posts = [...posts, ...uniqueNewPosts];
 					accountOffsets = { ...accountOffsets, ...newOffsets };
+					for (const [k, v] of Object.entries(newSinceIds)) {
+						newestSinceIds[k] = v;
+					}
 					bulkSetPosts(uniqueNewPosts)
 						.then(() => refreshUnreferencedPosts());
 				}
@@ -234,6 +249,27 @@
 			}
 		}
 	}
+
+	function topKey(): string {
+		return activeAccounts.map((a) => a.blogName).sort().join(',');
+	}
+
+	export const snapshot = {
+		capture: () => ({
+			posts,
+			accountOffsets,
+			newestSinceIds,
+			hasMore,
+			currentFilter
+		}),
+		restore: (value: any) => {
+			posts = value.posts || [];
+			accountOffsets = value.accountOffsets || {};
+			newestSinceIds = value.newestSinceIds || {};
+			hasMore = value.hasMore ?? true;
+			currentFilter = value.currentFilter || 'all';
+		}
+	};
 
 	// Filter is server-side: abort any in-flight fetch then reload with new filter
 	$effect(() => {

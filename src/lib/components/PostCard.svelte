@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from '@lucide/svelte';
-	import { getAllMediaUrls, getPrimaryMediaUrl, getVideoUrls, getImageUrls, getPosterUrls } from '$lib/mediaUrls';
+	import { extractMedia, variantForDisplay, getVideoUrls } from '$lib/mediaUrls';
+	import { downloadHighestRes } from '$lib/download';
 	import { settings } from '$lib/stores/settings';
-	import { requestMediaDownload } from '$lib/stores/downloads';
+	import { requestMediaDownload, cancelQueuedDownload } from '$lib/stores/downloads';
 	import { cachedMediaUrls } from '../mediaCacheStatus.svelte.ts';
 	import CachedMedia from './CachedMedia.svelte';
 	import type { TumblrPost } from '$lib/types';
@@ -20,11 +21,12 @@
 	}>();
 
 	let mediaInfo = $derived.by(() => {
-		const allUrls = getAllMediaUrls(post);
-		const videos = getVideoUrls(post);
-		const images = getImageUrls(post);
-		const posters = getPosterUrls(post);
-		const rawPrimary = getPrimaryMediaUrl(post);
+		const extraction = extractMedia(post);
+		const allUrls = extraction.urls;
+		const videos = extraction.videos;
+		const images = extraction.images;
+		const posters = extraction.posters;
+		const rawPrimary = extraction.primary;
 
 		let primary = rawPrimary;
 		let primaryType: 'image' | 'video' = 'image';
@@ -47,7 +49,11 @@
 			primary,
 			primaryType,
 			posterUrl,
-			previewUrl: posterUrl || primary || images[0] || '',
+			// Grid cards are a few hundred px wide — load a sized variant, not
+			// the original. Falls back to the URL itself when it has no size
+			// encoding (variantForDisplay is identity there).
+			displayUrl: primary ? variantForDisplay(primary, 640) : '',
+			previewUrl: (posterUrl || primary || images[0] || '') && variantForDisplay(posterUrl || primary || images[0] || '', 640),
 			allUrls,
 			isVideo: videos.length > 0,
 			isImage: images.length > 0,
@@ -105,10 +111,22 @@
 
 		mediaInfo.allUrls.forEach((url) => {
 			if (!cachedMediaUrls.has(url)) {
-				requestMediaDownload(url, postMeta);
+				requestMediaDownload(url, postMeta, 'visible');
 			}
 		});
 	}
+
+	/** Save the highest-resolution rendition of the primary media to disk. */
+	async function saveOriginalToDisk() {
+		const extraction = extractMedia(post);
+		const target = mediaInfo.isVideo
+			? (getVideoUrls(post)[0] || mediaInfo.primary)
+			: mediaInfo.primary;
+		if (!target) return;
+		await downloadHighestRes(target, post, extraction);
+	}
+
+	let visible = $state(false);
 
 	$effect(() => {
 		const autoCache = $settings.autoCacheMedia && autoCacheEnabled && mode !== 'cache';
@@ -128,8 +146,17 @@
 		};
 
 		for (const url of pending) {
-			requestMediaDownload(url, postMeta);
+			requestMediaDownload(url, postMeta, 'visible');
 		}
+	});
+
+	// Cancel still-queued work when the card unmounts (scrolled away) — keeps
+	// the bulk/visible lanes from fetching media nobody looks at anymore.
+	$effect(() => {
+		const urls = mediaInfo.allUrls;
+		return () => {
+			for (const url of urls) cancelQueuedDownload(url);
+		};
 	});
 </script>
 
@@ -173,17 +200,17 @@
 				</div>
 			{/if}
 		{:else}
-			<CachedMedia
-				url={mediaInfo.primary}
-				type={mediaInfo.primaryType}
-				posterUrl={mediaInfo.posterUrl}
-				thumbnailMode={true}
-				autoCacheEnabled={autoCacheEnabled}
-				alt={post.summary || 'Tumblr Post'}
-				class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-				onUnavailable={() => { mediaFailed = true; }}
-				post={post}
-			/>
+		<CachedMedia
+			url={mediaInfo.displayUrl || mediaInfo.primary}
+			type={mediaInfo.primaryType}
+			posterUrl={mediaInfo.posterUrl}
+			thumbnailMode={true}
+			autoCacheEnabled={autoCacheEnabled}
+			alt={post.summary || 'Tumblr Post'}
+			class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+			onUnavailable={() => { mediaFailed = true; }}
+			post={post}
+		/>
 		{/if}
 	{:else}
 		<div class="flex h-full w-full items-center justify-center bg-gray-800 p-4">
@@ -226,12 +253,16 @@
 		{/if}
 	</div>
 
-	<!-- NSFW Badge -->
-	{#if nsfw}
-		<div class="absolute top-3 right-3 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white shadow z-10 pointer-events-none">
-			NSFW
-		</div>
-	{/if}
+	<!-- Save-to-disk button -->
+	<button
+		type="button"
+		class="absolute top-3 right-11 z-10 rounded-full bg-black/60 p-2 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 pointer-events-auto"
+		aria-label="Download highest resolution"
+		title="Download highest resolution"
+		onclick={(e) => { e.stopPropagation(); void saveOriginalToDisk(); }}
+	>
+		<Download size={16} />
+	</button>
 
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<div

@@ -1,95 +1,70 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { forAccounts, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
+interface LikedPost {
+	id: number | string;
+	liked_timestamp: number | string;
+}
+
+/** Multi-account likes merge. Per-account `before` (liked_timestamp) cursors. */
 export const POST: RequestHandler = async ({ request }) => {
-	try {
-		const { accounts, before } = await request.json();
-
-		if (!accounts || !Array.isArray(accounts)) {
-			return new Response('Invalid accounts payload', { status: 400 });
-		}
-
-		const newBefore: Record<string, number> = {};
-
-		// Fetch from each account in parallel
-		const fetchPromises = accounts.map(async (account) => {
-			if (!account.token || !account.secret) {
-				return {
-					accountBlogName: account.blogName,
-					liked_posts: [],
-					response: null
-				};
-			}
-
-			const client = new Client({
-				consumer_key: TUMBLR_CONSUMER_KEY,
-				consumer_secret: TUMBLR_CONSUMER_SECRET,
-				token: account.token,
-				token_secret: account.secret
-			});
-
-			const params: any = {
-				limit: 20,
-				npf: true,
-				reblog_info: true,
-				notes_info: true
-			};
-			const accountBefore = before?.[account.blogName];
-			if (accountBefore) {
-				params.before = accountBefore.toString();
-			}
-
-			let accountLikes = [];
-			let accountResponse: any = null;
-			try {
-				await checkRateLimit();
-				const data = await client.userLikes(params);
-				accountResponse = data;
-				accountLikes = data.liked_posts || [];
-			} catch (error) {
-				console.error(`Failed to fetch likes for account ${account.blogName}:`, error);
-			}
-
-			// Track updated "before" timestamp for this account
-			if (accountLikes.length > 0) {
-				newBefore[account.blogName] = accountLikes[accountLikes.length - 1].liked_timestamp;
-			} else if (accountBefore) {
-				newBefore[account.blogName] = accountBefore;
-			}
-
-			return {
-				accountBlogName: account.blogName,
-				liked_posts: accountLikes,
-				response: accountResponse
-			};
-		});
-
-		const results = await Promise.all(fetchPromises);
-		const allLikes = results.flatMap((r) => r.liked_posts || []);
-
-		// Deduplicate by post ID
-		const uniqueLikesMap = new Map();
-		for (const post of allLikes) {
-			uniqueLikesMap.set(post.id, post);
-		}
-
-		// Sort by liked_timestamp descending
-		const sortedLikes = Array.from(uniqueLikesMap.values()).sort(
-			(a, b) => b.liked_timestamp - a.liked_timestamp
-		);
-
-		return new Response(JSON.stringify({ 
-			liked_posts: sortedLikes,
-			newBefore,
-			allLikedPosts: allLikes,
-			accountResponses: results
-		}), {
-			headers: { 'Content-Type': 'application/json' }
-		});
-	} catch (error) {
-		console.error('User Likes Server Error:', error);
-		return new Response('Internal Server Error', { status: 500 });
+	const accounts = await readAccounts(request);
+	if (!accounts || accounts.length === 0) {
+		return new Response('Invalid accounts payload', { status: 400 });
 	}
+
+	const { before } = (await request.json()) as {
+		before?: Record<string, string | number>;
+	};
+
+	const results = await forAccounts(accounts, async (client, account) => {
+		const params: Record<string, unknown> = {
+			limit: 20,
+			npf: true,
+			reblog_info: true
+		};
+		const accountBefore = before?.[account.blogName];
+		if (accountBefore) {
+			params.before = accountBefore.toString();
+		}
+		const data = await client.userLikes(params);
+		const liked_posts = (data.liked_posts ?? []) as LikedPost[];
+		return {
+			liked_posts,
+			newBefore: liked_posts.length > 0
+				? liked_posts[liked_posts.length - 1].liked_timestamp
+				: accountBefore
+		};
+	});
+
+	const allLikes = results.flatMap((r) => (r.ok ? r.value!.liked_posts : []));
+
+	// Deduplicate by post id.
+	const uniqueLikesMap = new Map<string, LikedPost>();
+	for (const post of allLikes) {
+		uniqueLikesMap.set(post.id.toString(), post);
+	}
+
+	const sortedLikes = Array.from(uniqueLikesMap.values()).sort(
+		(a, b) => Number(b.liked_timestamp) - Number(a.liked_timestamp)
+	);
+
+	const newBefore: Record<string, number> = {};
+	const likeUpdates: Record<string, Record<string, boolean>> = {};
+	for (const r of results) {
+		if (!r.ok || !r.value) continue;
+		if (r.value.newBefore !== undefined) newBefore[r.accountBlogName] = Number(r.value.newBefore);
+		for (const p of r.value.liked_posts) {
+			(likeUpdates[p.id.toString()] ??= {})[r.accountBlogName] = true;
+		}
+	}
+
+	return new Response(JSON.stringify({
+		liked_posts: sortedLikes,
+		newBefore,
+		accountResponses: results,
+		likeUpdates
+	}), {
+		headers: { 'Content-Type': 'application/json' }
+	});
 };
