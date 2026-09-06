@@ -236,6 +236,7 @@ function armControllerWait(): void {
 		// Re-dispatch every parked request in original order.
 		const parked = [...controllerWaiters.entries()];
 		controllerWaiters.clear();
+		console.log(`[SW] Service worker took control of the page — flushing ${parked.length} parked download request${parked.length === 1 ? '' : 's'}`);
 		for (const [url, meta] of parked) {
 			requestMediaDownload(url, meta);
 		}
