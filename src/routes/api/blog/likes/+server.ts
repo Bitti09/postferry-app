@@ -10,11 +10,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!accounts || accounts.length === 0) {
 		return new Response('Invalid account payload', { status: 400 });
 	}
-
-	const { blogName, before } = (await request.json()) as {
+	// Route fields ride on the account objects (single body read).
+	const first = accounts[0] as (typeof accounts)[number] & {
 		blogName?: string;
 		before?: string | number;
 	};
+	const { blogName, before } = first ?? {};
 	if (!blogName) {
 		return new Response('blogName is required', { status: 400 });
 	}

@@ -12,11 +12,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		return new Response('Invalid account payload', { status: 400 });
 	}
 
-	const { query, before, type } = (await request.json()) as {
+	// Route fields ride on the account objects (single body read — see
+	// readAccounts contract).
+	const body0 = accounts[0] as (typeof accounts)[number] & {
 		query?: string;
 		before?: string | number;
 		type?: string;
 	};
+	const { query, before, type } = body0 ?? {};
 
 	if (!query) {
 		return new Response('Query is required', { status: 400 });
