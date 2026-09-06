@@ -1,11 +1,13 @@
 // ─── cacheUtils ─────────────────────────────────────────────────────────────
 // Bulk cache orchestrator. Used by Dashboard / Likes / Search / Blog pages
 // when the user clicks "Cache Visible". Streams post → URL mapping through
-// `bulkIsMediaCached` for the existence check, then `bulkCacheMedia` for the
-// downloads (single-tx per batch, BATCH=6 in-flight fetches).
+// `bulkIsMediaCached` for the existence check, then `requestMediaDownload`
+// per URL. Concurrency is bounded by the download queue in
+// `$lib/stores/downloads` (CONCURRENCY in-flight fetches, FIFO for the rest).
 
 import { bulkIsMediaCached, type SlimMediaMeta } from '$lib/cache/blobs';
 import { requestMediaDownload } from '$lib/stores/downloads';
+import { scheduleMediaMaintenance } from '$lib/cache/eviction';
 import { getAllMediaUrls } from '$lib/mediaUrls';
 import type { TumblrPost } from '$lib/types';
 
@@ -63,6 +65,10 @@ export async function cacheAllVisible(
 	for (const item of items) {
 		requestMediaDownload(item.url, item.meta);
 	}
+
+	// A bulk cache may push the cache past its caps — run eviction shortly
+	// after, debounced so repeated clicks coalesce into one pass.
+	scheduleMediaMaintenance(30_000);
 
 	onProgress?.({ done: toDownload.length, total: toDownload.length });
 }

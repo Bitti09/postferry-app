@@ -18,6 +18,9 @@
 		fillHeight?: boolean;
 	}>();
 
+	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
+	const proxied = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? toProxyUrl(u) : u);
+
 	let lightboxUrl = $state<string | null>(null);
 
 	function openLightbox(url: string) {
@@ -401,7 +404,7 @@
 	>
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<img
-			src={lightboxUrl}
+			src={proxied(lightboxUrl)}
 			alt="Fullscreen"
 			class="w-screen h-screen object-contain select-none"
 			onclick={(e) => e.stopPropagation()}

@@ -24,6 +24,8 @@ export interface StoredMediaUrl {
 	url: string;
 	postId: number;
 	type: string;
+	/** Epoch ms the blob entered the offline cache. Used as LRU order for eviction; 0 = pre-v3 rows. */
+	cachedAt?: number;
 }
 
 export interface CachedAvatar {
@@ -81,6 +83,14 @@ export class TmblrCacheDB extends Dexie {
 		}).upgrade(tx => {
 			return tx.table('posts').toCollection().modify(post => {
 				post.sortTimestamp = post.post.liked_timestamp || post.cachedAt;
+			});
+		});
+		this.version(3).stores({
+			mediaUrls: 'url, postId, cachedAt'
+		}).upgrade(tx => {
+			// Backfill LRU timestamp for pre-v3 rows; 0 sorts them first (evicted first).
+			return tx.table('mediaUrls').toCollection().modify(m => {
+				if (m.cachedAt == null) m.cachedAt = 0;
 			});
 		});
 	}

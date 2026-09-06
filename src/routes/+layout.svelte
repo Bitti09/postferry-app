@@ -8,6 +8,9 @@
 	import Navbar from "$lib/components/Navbar.svelte";
 	import { accounts, accountsReady } from "$lib/stores/accounts";
 	import { refreshUnreferencedPosts } from "$lib/stores/unreferencedPosts";
+	import { initMediaCacheStatus } from "../lib/mediaCacheStatus.svelte.ts";
+	import { scheduleMediaMaintenance } from "$lib/cache/eviction";
+	import { setQueueDrainHandler } from "$lib/stores/downloads";
 	import type { TumblrAccount } from "$lib/types";
 
 	let { children } = $props();
@@ -19,6 +22,12 @@
 			// On localhost this is always false but data is safe in practice.
 		}
 		if (browser) {
+			initMediaCacheStatus();
+			// Orphan GC + size-cap eviction, debounced so it runs after the
+			// feed has settled, not during initial renders.
+			scheduleMediaMaintenance();
+			// Also run maintenance shortly after a download burst fully drains.
+			setQueueDrainHandler(() => scheduleMediaMaintenance(5_000));
 			void refreshUnreferencedPosts();
 		}
 	});

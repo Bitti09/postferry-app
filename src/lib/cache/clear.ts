@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { db } from './newDb';
+import { resetMediaCacheStatus } from '../mediaCacheStatus.svelte.ts';
 
 export async function clearCache(): Promise<void> {
 	if (!browser) return;
@@ -14,6 +15,7 @@ export async function clearCache(): Promise<void> {
 			await table.clear();
 		}
 	});
+	resetMediaCacheStatus();
 }
 
 export async function clearMediaCache(): Promise<void> {
@@ -23,4 +25,5 @@ export async function clearMediaCache(): Promise<void> {
 		await caches.delete('tmblr-media');
 	}
 	await db.mediaUrls.clear();
+	resetMediaCacheStatus();
 }
