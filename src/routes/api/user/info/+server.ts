@@ -1,7 +1,11 @@
 import { forAccounts, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
-/** User info for every account in the payload (multi-account aware). */
+/**
+ * User info for every account in the payload (multi-account aware).
+ * Response: { results: [{ accountBlogName, ok, user?, error? }] } — one
+ * entry per requested account, in request order.
+ */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await readAccounts(request);
 	if (!body) {
@@ -9,14 +13,15 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 	const { accounts } = body;
 
-	// tumblr.js types userInfo() as `Promise<any> | undefined` (callback API
-	// legacy); promise form always returns, so the assertion is sound.
 	const results = await forAccounts(accounts, (client) => client.userInfo() as Promise<any>);
-	const ok = results.filter((r) => r.ok);
 
 	return new Response(JSON.stringify({
-		users: ok.map((r) => ({ accountBlogName: r.accountBlogName, user: (r.value as { user?: unknown }).user })),
-		response: ok.map((r) => r.value)
+		results: results.map((r) => ({
+			accountBlogName: r.accountBlogName,
+			ok: r.ok,
+			user: r.ok ? (r.value as { user?: unknown })?.user : undefined,
+			error: r.ok ? undefined : r.error
+		}))
 	}), {
 		headers: { 'Content-Type': 'application/json' }
 	});
