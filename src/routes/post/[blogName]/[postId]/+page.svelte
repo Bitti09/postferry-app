@@ -59,9 +59,16 @@
 		let cursor = initialBeforeTimestamp;
 
 		try {
-			let guard = 0;
-			while (cursor && guard < 500) {
-				guard++;
+			// Eagerly page through notes ONLY while the API keeps giving new
+			// ones. Tumblr's notes pagination repeats the tail page once the
+			// cursor passes the oldest note — an unbounded loop there burned
+			// the rate limit (hundreds of identical requests per page view).
+			// Three guards now: stall detection (no new notes), no cursor
+			// advance, and a hard page budget. Totals stay approximate beyond
+			// that; "load more notes" fetches the rest on demand.
+			const MAX_NOTE_PAGES = 5;
+			for (let page = 0; page < MAX_NOTE_PAGES; page++) {
+				if (!cursor) break;
 				const res = await fetch(`/api/posts/detail`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
@@ -78,17 +85,26 @@
 				if (runId !== noteTotalsRun) return;
 				if (batch.length === 0) break;
 
+				let added = 0;
 				for (const note of batch) {
 					const key = `${note.blog_name}_${note.timestamp}_${note.type || ''}`;
 					if (seen.has(key)) continue;
 					seen.add(key);
+					added++;
 					processed++;
 					if (note?.type === 'like') likes++;
 					if (note?.type === 'reblog') reblogs++;
 					if (note?.type === 'reply' || note?.reply_text) comments++;
 				}
 
-				cursor = batch[batch.length - 1]?.timestamp ?? null;
+				// Stalled: the API returned only notes we already have — same
+				// page would repeat forever. Stop instead of re-requesting.
+				if (added === 0) break;
+
+				const nextCursor = batch[batch.length - 1]?.timestamp ?? null;
+				if (nextCursor === null || nextCursor >= cursor) break;
+				cursor = nextCursor;
+
 				noteTotals = {
 					likes,
 					reblogs,
@@ -101,12 +117,14 @@
 			}
 
 			if (runId === noteTotalsRun) {
+				// complete stays false when the budget/stall guards stopped us —
+				// the UI keeps showing the "load more notes" affordance.
 				noteTotals = {
 					likes,
 					reblogs,
 					comments,
 					processed,
-					complete: true
+					complete: processed >= (post?.note_count ?? processed)
 				};
 			}
 		} catch (e) {
