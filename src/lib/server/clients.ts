@@ -39,17 +39,28 @@ export function clientFor(account: AccountCredentials): Client | null {
 
 /**
  * Parse a request body carrying either `accounts: AccountCredentials[]` or a
- * single `account` into a normalized list. Returns null on malformed JSON.
+ * single `account`, and return the WHOLE parsed body — callers destructure
+ * both the account fields and their route-specific fields from the same
+ * objects. The request body can only be read ONCE; routes must never call
+ * `request.json()` again after this (it throws "Body has already been read").
+ *
+ * Returns null on malformed JSON or an absent/empty account list.
  */
-export async function readAccounts(request: Request): Promise<AccountCredentials[] | null> {
+export async function readAccounts(
+	request: Request
+): Promise<(AccountCredentials & Record<string, unknown>)[] | null> {
 	try {
 		const body = (await request.json()) as {
-			accounts?: AccountCredentials[];
-			account?: AccountCredentials;
+			accounts?: (AccountCredentials & Record<string, unknown>)[];
+			account?: AccountCredentials & Record<string, unknown>;
 		};
-		if (Array.isArray(body.accounts)) return body.accounts;
-		if (body.account) return [body.account];
-		return null;
+		const list = Array.isArray(body.accounts)
+			? body.accounts
+			: body.account
+				? [body.account]
+				: null;
+		if (!list || list.length === 0) return null;
+		return list;
 	} catch {
 		return null;
 	}

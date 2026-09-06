@@ -13,11 +13,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
 
-	const { offsets, type, since_id } = (await request.json()) as {
-		offsets?: Record<string, string | number>;
-		type?: string | null;
-		since_id?: string | number;
-	};
+	// Route fields ride along on the account objects (single body read —
+	// see readAccounts contract).
+	const first = accounts[0];
+	const offsets = first?.offsets as Record<string, string | number> | undefined;
+	const type = (first?.type as string | null | undefined) ?? null;
+	const since_id = first?.since_id as string | number | undefined;
 
 	const results = await forAccounts(accounts, async (client, account) => {
 		const params: Record<string, unknown> = {

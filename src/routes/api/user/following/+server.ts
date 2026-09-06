@@ -11,11 +11,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!accounts || accounts.length === 0) {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
-
-	const { offsets } = (await request.json()) as {
-		offsets?: Record<string, number>;
-	};
-
+	// Route fields ride on the account objects (single body read).
+	const offsets = accounts[0]?.offsets as Record<string, number> | undefined;
 	const results = await forAccounts(accounts, async (client, account) => {
 		const params: Record<string, unknown> = { limit: 20 };
 		const accountOffset = offsets?.[account.blogName];

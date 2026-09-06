@@ -11,12 +11,13 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!accounts || accounts.length === 0) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
-
-	const { postId, reblogKey, comment } = (await request.json()) as {
+	// Route fields ride on the account objects (single body read).
+	const first = accounts[0] as (typeof accounts)[number] & {
 		postId?: string | number;
 		reblogKey?: string;
 		comment?: string;
 	};
+	const { postId, reblogKey, comment } = first ?? {};
 	if (!postId || !reblogKey) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
