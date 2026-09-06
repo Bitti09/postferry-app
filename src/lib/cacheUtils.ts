@@ -30,21 +30,25 @@ export async function cacheAllVisible(
 
 	const urlMeta = new Map<string, SlimMediaMeta>();
 	for (const post of posts) {
+		// Posts arrive as Svelte $state proxies from component props; snapshot
+		// to plain data — IDB structured clone rejects proxies, and this object
+		// is written to IDB when the download completes.
+		const plainPost: TumblrPost = $state.snapshot(post);
 		const meta: SlimMediaMeta = {
-			postId: post.id,
-			blogName: post.blog_name,
-			timestamp: post.timestamp,
-			post,
+			postId: plainPost.id,
+			blogName: plainPost.blog_name,
+			timestamp: plainPost.timestamp,
+			post: plainPost,
 			postMeta: {
-				id: post.id,
-				blogName: post.blog_name,
-				timestamp: post.timestamp,
-				summary: post.summary ?? '',
-				type: post.type,
-				tags: post.tags ?? []
+				id: plainPost.id,
+				blogName: plainPost.blog_name,
+				timestamp: plainPost.timestamp,
+				summary: plainPost.summary ?? '',
+				type: plainPost.type,
+				tags: plainPost.tags ?? []
 			}
 		};
-		for (const url of getAllMediaUrls(post)) {
+		for (const url of getAllMediaUrls(plainPost)) {
 			if (!urlMeta.has(url)) urlMeta.set(url, meta);
 		}
 	}

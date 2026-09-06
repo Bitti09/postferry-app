@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import type { SlimMediaMeta } from '$lib/cache/blobs';
 import { db, mediaAssetBase } from '$lib/cache/newDb';
+import type { TumblrPost } from '$lib/types';
 import { cachedMediaUrls, dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 import { getCachedPostById, freshEntry, putCachedPostEntry } from '$lib/cache/posts';
 
@@ -166,14 +167,20 @@ if (browser && navigator.serviceWorker) {
 				try {
 					const mediaBase = mediaAssetBase(url);
 					await db.mediaUrls.put({ url, postId: meta.postId, type: mimeType || '', cachedAt: Date.now(), base: mediaBase });
-					let existing = await getCachedPostById(meta.postId);
-					if (!existing) {
-						if (meta.post) existing = freshEntry(meta.post, meta.blogName);
-					} else {
-						if (meta.post) existing.post = meta.post;
-						existing.cachedAt = Date.now();
+					if (meta.post) {
+						// meta.post may be a Svelte $state proxy (it was captured from
+						// component props at queue time). IDB structured clone rejects
+						// proxies — snapshot to plain data first.
+						const plainPost: TumblrPost = $state.snapshot(meta.post);
+						const existing = await getCachedPostById(meta.postId);
+						if (!existing) {
+							await putCachedPostEntry(meta.postId, freshEntry(plainPost, meta.blogName));
+						} else {
+							existing.post = plainPost;
+							existing.cachedAt = Date.now();
+							await putCachedPostEntry(meta.postId, existing);
+						}
 					}
-					if (existing) await putCachedPostEntry(meta.postId, existing);
 				} catch (e) {
 					console.error('Failed to save metadata to IndexedDB for', url, e);
 				}

@@ -257,16 +257,30 @@ async function videoFileHandle(url: string, create: boolean): Promise<FileSystem
 async function writeVideoToOpfs(url: string, response: Response): Promise<boolean> {
 	const handle = await videoFileHandle(url, true);
 	if (!handle || !response.body) return false;
-	const buffer = await response.arrayBuffer();
-	const access = await handle.createSyncAccessHandle();
-	try {
-		access.truncate(0);
-		access.write(buffer, { at: 0 });
-		access.flush();
-	} finally {
-		access.close();
+	// createSyncAccessHandle is the fast path but is not exposed on
+	// FileSystemFileHandle in every runtime (user hit "not a function").
+	// createWritable streams the response body to OPFS everywhere the
+	// bucket/OPFS APIs exist — same durability, slightly slower.
+	if (typeof handle.createSyncAccessHandle === 'function') {
+		const access = await handle.createSyncAccessHandle();
+		try {
+			const buffer = await response.arrayBuffer();
+			access.truncate(0);
+			access.write(buffer, { at: 0 });
+			access.flush();
+		} finally {
+			access.close();
+		}
+		return true;
 	}
-	return true;
+	try {
+		const writable = await handle.createWritable();
+		await response.body.pipeTo(writable);
+		return true;
+	} catch (e) {
+		console.error('[SW] OPFS write failed', e);
+		return false;
+	}
 }
 
 /**

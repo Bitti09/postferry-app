@@ -156,9 +156,12 @@ export async function loadAllAccountInfos(): Promise<Record<string, TumblrUser>>
 
 export async function setAccountInfo(blogName: string, user: TumblrUser): Promise<void> {
 	if (!browser) return;
+	// Callers may hand us a Svelte $state proxy; IDB structured clone rejects
+	// proxies (DataCloneError). Round-trip to plain data first.
+	const plain: TumblrUser = JSON.parse(JSON.stringify(user));
 	await db.accountInfos.put({
 		blogName,
-		user,
+		user: plain,
 		cachedAt: Date.now()
 	});
 }

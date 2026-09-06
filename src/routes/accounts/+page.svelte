@@ -25,20 +25,31 @@
 		loading = true;
 		error = '';
 		try {
-			const promises = $accounts.map(async (acc) => {
-				const res = await fetch('/api/user/info', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ account: acc })
-				});
-				if (res.ok) {
-					const payload = await res.json();
-					const info: TumblrUser = payload.user || payload;
-					accountInfos[acc.blogName] = info;
-					await setAccountInfo(acc.blogName, info);
-				}
+			// Single multi-account round trip: the route returns one result per
+			// account, in request order, with per-account error isolation.
+			const res = await fetch('/api/user/info', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ accounts: $accounts })
 			});
-			await Promise.all(promises);
+			if (!res.ok) throw new Error(`user/info failed: ${res.status}`);
+			const payload = await res.json();
+			const results: { accountBlogName: string; ok: boolean; user?: TumblrUser; error?: string }[] =
+				payload.results ?? [];
+
+			// Strip reactivity BEFORE the IDB write: $state proxies cannot be
+			// structured-cloned (DataCloneError).
+			for (const r of results) {
+				if (!r.ok || !r.user) continue;
+				const plain: TumblrUser = JSON.parse(JSON.stringify(r.user));
+				accountInfos[r.accountBlogName] = plain;
+				await setAccountInfo(r.accountBlogName, plain);
+			}
+
+			const failed = results.filter((r) => !r.ok);
+			if (failed.length > 0) {
+				error = `Some accounts failed: ${failed.map((f) => f.accountBlogName).join(', ')}`;
+			}
 		} catch (err: any) {
 			error = 'Failed to fetch some account information.';
 			console.error(err);
