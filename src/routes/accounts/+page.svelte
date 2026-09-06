@@ -247,9 +247,9 @@
 							<a href={`/blog/${account.blogName}`} class="btn btn-sm btn-ghost gap-2 text-gray-400 hover:text-white group-hover:bg-gray-800">
 								View Blog
 							</a>
-							<button class="btn btn-sm btn-outline border-gray-800 hover:bg-gray-800 text-gray-400" onclick={() => window.location.href = `/likes?account=${account.blogName}`}>
+							<a href={`/blog/${account.blogName}/likes`} class="btn btn-sm btn-outline border-gray-800 hover:bg-gray-800 text-gray-400">
 								See Likes
-							</button>
+							</a>
 							{#if !isOffline}
 								<button 
 									class="btn btn-sm btn-primary gap-2" 
