@@ -1,100 +1,76 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { forAccounts, readAccounts } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
+interface DashboardPost {
+	id: number | string;
+	timestamp: number;
+}
+
+/** Multi-account dashboard merge. Per-account `before_id` cursors. */
 export const POST: RequestHandler = async ({ request }) => {
-	try {
-		const { accounts, offsets, type } = await request.json();
+	const accounts = await readAccounts(request);
+	if (!accounts || accounts.length === 0) {
+		return new Response('Invalid accounts payload', { status: 400 });
+	}
 
-		if (!accounts || !Array.isArray(accounts)) {
-			return new Response('Invalid accounts payload', { status: 400 });
+	const { offsets, type, since_id } = (await request.json()) as {
+		offsets?: Record<string, string | number>;
+		type?: string | null;
+		since_id?: string | number;
+	};
+
+	const results = await forAccounts(accounts, async (client, account) => {
+		const params: Record<string, unknown> = {
+			limit: 20,
+			npf: true,
+			reblog_info: true
+		};
+		if (type) {
+			params.type = type;
 		}
-
-		const newOffsets: Record<string, string> = {};
-
-		// Fetch from each account in parallel using its specific offset
-		const fetchPromises = accounts.map(async (account) => {
-			if (!account.token || !account.secret) {
-				return {
-					accountBlogName: account.blogName,
-					posts: [],
-					response: null
-				};
-			}
-
-			const client = new Client({
-				consumer_key: TUMBLR_CONSUMER_KEY,
-				consumer_secret: TUMBLR_CONSUMER_SECRET,
-				token: account.token,
-				token_secret: account.secret
-			});
-
-			const params: any = {
-				limit: 20,
-				npf: true,
-				reblog_info: true,
-				notes_info: true
-			};
-			if (type) {
-				params.type = type;
-			}
-
-			// Use the specific offset for this account if it exists
+		if (since_id) {
+			// Top-up refresh: only posts newer than what we already have.
+			params.since_id = since_id.toString();
+		} else {
 			const accountOffset = offsets?.[account.blogName];
 			if (accountOffset) {
 				params.before_id = accountOffset.toString();
 			}
-
-			let accountPosts = [];
-			let accountResponse: any = null;
-			try {
-				await checkRateLimit();
-				const data = await client.userDashboard(params);
-				accountResponse = data;
-				accountPosts = data.posts || [];
-			} catch (error) {
-				console.error(`Failed to fetch dashboard for account ${account.blogName}:`, error);
-			}
-
-			// Track the new offset for this specific account
-			if (accountPosts.length > 0) {
-				newOffsets[account.blogName] = accountPosts[accountPosts.length - 1].id.toString();
-			} else if (accountOffset) {
-				// Keep the old offset if no new posts were found
-				newOffsets[account.blogName] = accountOffset;
-			}
-
-			return {
-				accountBlogName: account.blogName,
-				posts: accountPosts,
-				response: accountResponse
-			};
-		});
-
-		const results = await Promise.all(fetchPromises);
-		const allPosts = results.flatMap((r) => r.posts || []);
-
-		// Deduplicate and sort
-		const uniquePostsMap = new Map();
-		for (const post of allPosts) {
-			uniquePostsMap.set(post.id, post);
 		}
+		const data = await client.userDashboard(params);
+		const posts = (data.posts ?? []) as DashboardPost[];
+		return {
+			posts,
+			// Newest post id per account for since_id top-ups.
+			newSinceId: posts.length > 0 ? posts[0].id.toString() : undefined,
+			// Oldest post id per account for downward pagination.
+			newBeforeId: posts.length > 0 ? posts[posts.length - 1].id.toString() : undefined
+		};
+	});
 
-		const sortedPosts = Array.from(uniquePostsMap.values()).sort(
-			(a, b) => b.timestamp - a.timestamp
-		);
+	const allPosts = results.flatMap((r) => (r.ok ? r.value!.posts : []));
 
-		return new Response(JSON.stringify({ 
-			posts: sortedPosts,
-			newOffsets,
-			allPosts,
-			accountResponses: results
-		}), {
-			headers: { 'Content-Type': 'application/json' }
-		});
-	} catch (error) {
-		console.error('Dashboard Error:', error);
-		return new Response('Internal Server Error', { status: 500 });
+	// Deduplicate and sort by timestamp descending.
+	const uniquePostsMap = new Map<string, DashboardPost>();
+	for (const post of allPosts) {
+		uniquePostsMap.set(post.id.toString(), post);
 	}
+	const sortedPosts = Array.from(uniquePostsMap.values()).sort((a, b) => b.timestamp - a.timestamp);
+
+	const newOffsets: Record<string, string> = {};
+	const newSinceIds: Record<string, string> = {};
+	for (const r of results) {
+		if (!r.ok || !r.value) continue;
+		if (r.value.newBeforeId) newOffsets[r.accountBlogName] = r.value.newBeforeId;
+		if (r.value.newSinceId) newSinceIds[r.accountBlogName] = r.value.newSinceId;
+	}
+
+	return new Response(JSON.stringify({
+		posts: sortedPosts,
+		newOffsets,
+		newSinceIds,
+		accountResponses: results
+	}), {
+		headers: { 'Content-Type': 'application/json' }
+	});
 };

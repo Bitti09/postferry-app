@@ -322,6 +322,18 @@ export type PostDetailResponse = TumblrApiResponse<{ posts: TumblrPost[] }>;
 
 // ─── Media Extraction ───────────────────────────────────────────────────────
 
+export interface MediaVariant {
+	url: string;
+	width: number;
+	height: number;
+	/** Tumblr guarantees this rendition preserves the original aspect/size. */
+	original: boolean;
+	hd: boolean;
+	cropped: boolean;
+	/** Populated only for video renditions; undefined for images. */
+	video?: boolean;
+}
+
 export interface MediaExtraction {
 	urls: string[];
 	primary: string;
@@ -329,6 +341,12 @@ export interface MediaExtraction {
 	images: string[];
 	posters: string[];
 	filmstrips: string[];
+	/**
+	 * Every known rendition per display URL, keyed by the chosen (best) URL.
+	 * Lets the download function resolve the true original regardless of what
+	 * the grid displayed, and lets the grid pick a small variant.
+	 */
+	variants: Map<string, MediaVariant[]>;
 }
 
 // ─── Cache Types ──────────────────────────────────────────────────

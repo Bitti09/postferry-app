@@ -65,15 +65,61 @@ sw.addEventListener('fetch', (event) => {
 		if (url.pathname.startsWith('/api/media/proxy')) {
 			const targetUrl = url.searchParams.get('url');
 			if (targetUrl) {
-				const mediaCache = await caches.open('tmblr-media');
+				const mediaCache = await caches.open(MEDIA_CACHE);
 				const cached = await mediaCache.match(targetUrl);
 				if (cached) return cached;
-				
-				try {
-					return await fetch(event.request);
-				} catch {
+
+				// Range requests (video seeking) can't be satisfied from a full
+				// cached body — stream them through the proxy, uncached.
+				// Videos: serve from OPFS (byte-accurate Range support), stream
+				// misses to disk. Range requests never hit Cache Storage.
+				const rangeHeader = event.request.headers.get('range');
+				if (isVideoUrl(targetUrl)) {
+					const opfsHit = await serveVideoFromOpfs(targetUrl, rangeHeader);
+					if (opfsHit) return opfsHit;
+					try {
+						const upstream = rangeHeader
+							? await fetch(event.request)
+							: await fetchMediaWithFallback(targetUrl, event.request);
+						if (upstream && upstream.ok && !rangeHeader) {
+							// Persist the whole video to OPFS, respond from disk so the
+							// client sees a stable non-streaming body.
+							const stored = await writeVideoToOpfs(targetUrl, upstream.clone());
+							broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: upstream.headers.get('content-type') || 'video/mp4' });
+							if (stored) {
+								const fromDisk = await serveVideoFromOpfs(targetUrl, null);
+								if (fromDisk) return fromDisk;
+							}
+						}
+						if (upstream) return upstream;
+					} catch {
+						return new Response('', { status: 504, statusText: 'Offline' });
+					}
 					return new Response('', { status: 504, statusText: 'Offline' });
 				}
+
+				// Range requests for non-video content can't be satisfied from a
+				// full cached body — stream them through the proxy, uncached.
+				if (rangeHeader) {
+					try {
+						return await fetch(event.request);
+					} catch {
+						return new Response('', { status: 504, statusText: 'Offline' });
+					}
+				}
+
+				// Cache miss: fetch the CDN URL directly (Tumblr media hosts send
+				// ACAO: *, so this is a readable cors response) and persist it, so
+				// everything viewed once is offline. Proxy only as fallback.
+				const res = await fetchMediaWithFallback(targetUrl, event.request);
+				if (res && res.ok) {
+					const type = res.headers.get('content-type') || '';
+					await mediaCache.put(targetUrl, res.clone());
+					broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
+					return res;
+				}
+				if (res) return res;
+				return new Response('', { status: 504, statusText: 'Offline' });
 			}
 		}
 
@@ -117,77 +163,260 @@ sw.addEventListener('fetch', (event) => {
 
 	event.respondWith(respond() as Promise<Response>);
 });
-// Helper to parse Tumblr media URLs into a base identity and a size
+// ─── Tumblr media URL canonicalization ──────────────────────────────────────
+const MEDIA_CACHE = 'tmblr-media';
+
+/**
+ * Parse a Tumblr CDN media URL into a size-independent identity + dimensions.
+ * Handles both real shapes:
+ *   https://64.media.tumblr.com/<a>/<hash>/s1280x1920/<b>.jpg   (segment form)
+ *   https://64.media.tumblr.com/.../tumblr_<hash>_1280.jpg      (legacy suffix)
+ * Returns null for URLs with no size encoding (avatars, embeds).
+ */
 function parseTumblrMediaUrl(url: string) {
-	// Matches patterns like: .../tumblr_hash_1280.jpg
-	// We want to capture the base URL without the size suffix, the size integer, and the extension
-	const match = url.match(/^(.*?_)(?:(\d+)|([a-zA-Z0-9]+))\.([a-zA-Z0-9]+)$/);
+	const clean = url.split('#')[0].split('?')[0];
+	const seg = clean.match(/^(.*\/)s(\d+)x(\d+)[a-zA-Z0-9_]*(\/[^/]+)\.([a-zA-Z0-9]+)$/);
+	if (seg) {
+		return {
+			base: `${seg[1]}${seg[4]}.${seg[5]}`,
+			width: parseInt(seg[2], 10),
+			height: parseInt(seg[3], 10),
+			area: parseInt(seg[2], 10) * parseInt(seg[3], 10),
+			ext: seg[5]
+		};
+	}
+	const suffix = clean.match(/^(.*?_)(\d+)\.([a-zA-Z0-9]+)$/);
+	if (suffix) {
+		const width = parseInt(suffix[2], 10);
+		return {
+			base: `${suffix[1]}${suffix[3]}`,
+			width,
+			height: 0,
+			area: width,
+			ext: suffix[3]
+		};
+	}
+	return null;
+}
+
+/**
+ * Fetch media with direct-CDN first (readable cors response thanks to ACAO:*),
+ * falling back to the same-origin Node proxy for hosts/content that fails.
+ * `rangeRequest` is the original page request when Range streaming is needed.
+ */
+async function fetchMediaWithFallback(targetUrl: string, rangeRequest?: Request): Promise<Response | null> {
+	if (!rangeRequest) {
+		try {
+			const direct = await fetch(targetUrl, { credentials: 'omit' });
+			if (direct.ok) return direct;
+		} catch {
+			// fall through to proxy
+		}
+	}
+	try {
+		const proxied = await fetch(rangeRequest ?? `/api/media/proxy?url=${encodeURIComponent(targetUrl)}`);
+		return proxied.ok ? proxied : null;
+	} catch {
+		return null;
+	}
+}
+
+async function broadcastToClients(msg: Record<string, unknown>): Promise<void> {
+	const allClients = await sw.clients.matchAll();
+	for (const client of allClients) {
+		client.postMessage(msg);
+	}
+}
+
+// ─── OPFS video storage ─────────────────────────────────────────────────────
+// Videos go to the Origin Private File System instead of Cache Storage:
+// streaming writes, cheap size reads, and byte-accurate Range serving.
+// createSyncAccessHandle is service-worker-only, which is where all writes
+// happen anyway.
+
+const VIDEO_URL_RE = /\.(mp4|webm)(?:[?#]|$)/i;
+
+function videoFileName(url: string): string {
+	const parsed = parseTumblrMediaUrl(url);
+	const identity = parsed ? parsed.base : url;
+	// File names: lowercase alphanumeric + underscores only.
+	const safe = identity.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+	return `v_${safe}`.slice(0, 240);
+}
+
+async function videoFileHandle(url: string, create: boolean): Promise<FileSystemFileHandle | null> {
+	if (!self.navigator.storage?.getDirectory) return null;
+	try {
+		const root = await self.navigator.storage.getDirectory();
+		return await root.getFileHandle(videoFileName(url), { create });
+	} catch {
+		return null;
+	}
+}
+
+async function writeVideoToOpfs(url: string, response: Response): Promise<boolean> {
+	const handle = await videoFileHandle(url, true);
+	if (!handle || !response.body) return false;
+	const buffer = await response.arrayBuffer();
+	const access = await handle.createSyncAccessHandle();
+	try {
+		access.truncate(0);
+		access.write(buffer, { at: 0 });
+		access.flush();
+	} finally {
+		access.close();
+	}
+	return true;
+}
+
+/**
+ * Serve a video from OPFS. Honors Range requests with 206 slicing; a request
+ * without Range gets the whole file as 200.
+ */
+async function serveVideoFromOpfs(url: string, rangeHeader: string | null): Promise<Response | null> {
+	const handle = await videoFileHandle(url, false);
+	if (!handle) return null;
+	let file: File;
+	try {
+		file = await handle.getFile();
+	} catch {
+		return null;
+	}
+	if (file.size === 0) return null;
+
+	const contentType = url.toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4';
+	const range = parseRangeHeader(rangeHeader, file.size);
+	if (range) {
+		const slice = file.slice(range.start, range.end + 1);
+		return new Response(slice, {
+			status: 206,
+			headers: {
+				'Content-Type': contentType,
+				'Content-Length': String(range.end - range.start + 1),
+				'Content-Range': `bytes ${range.start}-${range.end}/${file.size}`,
+				'Accept-Ranges': 'bytes'
+			}
+		});
+	}
+	return new Response(file, {
+		status: 200,
+		headers: {
+			'Content-Type': contentType,
+			'Content-Length': String(file.size),
+			'Accept-Ranges': 'bytes'
+		}
+	});
+}
+
+function parseRangeHeader(header: string | null, size: number): { start: number; end: number } | null {
+	if (!header) return null;
+	const match = header.match(/^bytes=(\d*)-(\d*)$/);
 	if (!match) return null;
-	
-	return {
-		base: match[1], // e.g. "https://.../tumblr_hash_"
-		size: parseInt(match[2] || '0', 10), // e.g. 1280
-		ext: match[4]
-	};
+	const [, rawStart, rawEnd] = match;
+	let start: number;
+	let end: number;
+	if (rawStart === '') {
+		// suffix range: last N bytes
+		const n = parseInt(rawEnd, 10);
+		if (!Number.isFinite(n) || n <= 0) return null;
+		start = Math.max(0, size - n);
+		end = size - 1;
+	} else {
+		start = parseInt(rawStart, 10);
+		end = rawEnd === '' ? size - 1 : Math.min(parseInt(rawEnd, 10), size - 1);
+	}
+	if (!Number.isFinite(start) || start > end || start >= size) return null;
+	return { start, end };
+}
+
+async function deleteVideoFromOpfs(urls: string[]): Promise<void> {
+	if (!self.navigator.storage?.getDirectory) return;
+	try {
+		const root = await self.navigator.storage.getDirectory();
+		for (const url of urls) {
+			try {
+				await root.removeEntry(videoFileName(url));
+			} catch {
+				// already gone
+			}
+		}
+	} catch {
+		// OPFS unavailable
+	}
+}
+
+function isVideoUrl(url: string): boolean {
+	return VIDEO_URL_RE.test(url);
 }
 
 sw.addEventListener('message', (event) => {
-	if (event.data && event.data.type === 'CACHE_MEDIA') {
-		const targetUrl = event.data.url;
-		if (!targetUrl) return;
+	const data = event.data as { type?: string; url?: string } | null;
+	if (!data || data.type !== 'CACHE_MEDIA' || !data.url) return;
+	const targetUrl = data.url;
 
-		event.waitUntil(
-			(async () => {
-				const broadcast = async (msg: any) => {
-					const allClients = await sw.clients.matchAll();
-					for (const client of allClients) {
-						client.postMessage(msg);
-					}
-				};
-
-				try {
-					const mediaCache = await caches.open('tmblr-media');
-					const existing = await mediaCache.match(targetUrl);
-					if (existing) {
-						const type = existing.headers.get('content-type') || '';
-						await broadcast({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
-						return;
-					}
-
-					const parsedTarget = parseTumblrMediaUrl(targetUrl);
-					if (parsedTarget && parsedTarget.size > 0) {
-						// Scan existing cache keys to find lower-quality versions of the same asset
-						const keys = await mediaCache.keys();
-						for (const request of keys) {
-							const cachedUrl = request.url;
-							const parsedCached = parseTumblrMediaUrl(cachedUrl);
-							
-							if (parsedCached && 
-								parsedCached.base === parsedTarget.base && 
-								parsedCached.ext === parsedTarget.ext && 
-								parsedCached.size < parsedTarget.size) {
-								console.log(`[SW] Upgrading cache: removing lower quality ${cachedUrl} in favor of ${targetUrl}`);
-								await mediaCache.delete(request);
-							}
-						}
-					}
-
-					let response = await fetch(`/api/media/proxy?url=${encodeURIComponent(targetUrl)}`);
-					if (!response.ok) {
-						response = await fetch(targetUrl);
-					}
-
-					if (response.ok) {
-						const type = response.headers.get('content-type') || '';
-						await mediaCache.put(targetUrl, response.clone());
-						await broadcast({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
-					} else {
-						await broadcast({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: `Status ${response.status}` });
-					}
-				} catch (err) {
-					await broadcast({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: String(err) });
+	event.waitUntil(
+		(async () => {
+			try {
+				const mediaCache = await caches.open(MEDIA_CACHE);
+				const existing = await mediaCache.match(targetUrl);
+				if (existing) {
+					const type = existing.headers.get('content-type') || '';
+					await broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
+					return;
 				}
-			})()
-		);
-	}
+
+				// Upgrade handling: ask the page to resolve lower-res renditions of
+				// the same asset from the IDB index (O(index) instead of an O(keys)
+				// scan over a 20k-entry cache). The page replies with DROP_MEDIA.
+				const parsedTarget = parseTumblrMediaUrl(targetUrl);
+				if (parsedTarget && parsedTarget.area > 0) {
+					await broadcastToClients({
+						type: 'RESOLVE_UPGRADE',
+						url: targetUrl,
+						base: parsedTarget.base,
+						ext: parsedTarget.ext,
+						area: parsedTarget.area
+					});
+				}
+
+				const response = await fetchMediaWithFallback(targetUrl);
+				if (response) {
+					const type = response.headers.get('content-type') || '';
+					if (isVideoUrl(targetUrl)) {
+						const stored = await writeVideoToOpfs(targetUrl, response);
+						if (stored) {
+							await broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
+						} else {
+							// OPFS unavailable: fall back to Cache Storage.
+							await mediaCache.put(targetUrl, response.clone());
+							await broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
+						}
+					} else {
+						await mediaCache.put(targetUrl, response.clone());
+						await broadcastToClients({ type: 'MEDIA_CACHED', url: targetUrl, mimeType: type });
+					}
+				} else {
+					await broadcastToClients({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: 'unreachable' });
+				}
+			} catch (err) {
+				await broadcastToClients({ type: 'MEDIA_CACHE_ERROR', url: targetUrl, error: String(err) });
+			}
+		})()
+	);
+});
+
+// Page-driven eviction of superseded lower-res renditions.
+sw.addEventListener('message', (event) => {
+	const data = event.data as { type?: string; urls?: string[] } | null;
+	if (!data || data.type !== 'DROP_MEDIA' || !Array.isArray(data.urls)) return;
+	event.waitUntil(
+		(async () => {
+			const mediaCache = await caches.open(MEDIA_CACHE);
+			const urls = data.urls ?? [];
+			for (const url of urls) {
+				await mediaCache.delete(url);
+				if (isVideoUrl(url)) await deleteVideoFromOpfs([url]);
+			}
+		})()
+	);
 });

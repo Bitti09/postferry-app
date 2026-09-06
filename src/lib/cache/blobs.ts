@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import type { TumblrPost } from '$lib/types';
+import { openMediaCache } from './buckets';
 import { db } from './newDb';
 import { cachedMediaUrls, dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 
@@ -25,8 +26,7 @@ export interface MediaRef { url: string; type: string; size: number }
 const CACHE_NAME = 'tmblr-media';
 
 export async function getMediaCache(): Promise<Cache | null> {
-	if (!browser || !window.caches) return null;
-	return await caches.open(CACHE_NAME);
+	return openMediaCache();
 }
 
 export async function isMediaCached(url: string): Promise<boolean> {

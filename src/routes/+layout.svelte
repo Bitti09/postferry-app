@@ -9,6 +9,7 @@
 	import { accounts, accountsReady } from "$lib/stores/accounts";
 	import { refreshUnreferencedPosts } from "$lib/stores/unreferencedPosts";
 	import { initMediaCacheStatus } from "../lib/mediaCacheStatus.svelte.ts";
+	import { migrateIntoBuckets } from "$lib/cache/buckets";
 	import { scheduleMediaMaintenance } from "$lib/cache/eviction";
 	import { setQueueDrainHandler } from "$lib/stores/downloads";
 	import type { TumblrAccount } from "$lib/types";
@@ -22,6 +23,7 @@
 			// On localhost this is always false but data is safe in practice.
 		}
 		if (browser) {
+			void migrateIntoBuckets();
 			initMediaCacheStatus();
 			// Orphan GC + size-cap eviction, debounced so it runs after the
 			// feed has settled, not during initial renders.

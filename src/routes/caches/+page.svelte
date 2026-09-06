@@ -38,7 +38,7 @@
 	let loadToken = 0;
 
 	let cacheStats = $state({ count: 0, estimatedMb: 0 });
-	let storageQuota = $state({ usageMb: 0, quotaMb: 0, pct: 0 });
+	let storageQuota = $state({ usageMb: 0, quotaMb: 0, pct: 0, persisted: false });
 
 	let slideshowActive = $state(false);
 	let activeSlideshowPostId = $state<string | number | null>(null);
@@ -155,10 +155,17 @@
 		const { usage = 0, quota = 1 } = await navigator.storage.estimate();
 		const usageMb = Math.round((usage / 1024 / 1024) * 10) / 10;
 		const quotaMb = Math.round((quota / 1024 / 1024) * 10) / 10;
+		let persisted = false;
+		try {
+			persisted = (await navigator.storage.persisted?.()) ?? false;
+		} catch {
+			// persisted() unsupported
+		}
 		storageQuota = {
 			usageMb,
 			quotaMb,
 			pct: Math.min(100, Math.round((usage / quota) * 100)),
+			persisted
 		};
 	}
 
@@ -247,6 +254,7 @@
 			usageMb: 0,
 			quotaMb: storageQuota.quotaMb,
 			pct: 0,
+			persisted: storageQuota.persisted
 		};
 		await refreshStorageQuota();
 		await refreshUnreferencedPosts();
@@ -331,7 +339,9 @@
 							<circle cx="24" cy="24" {r} fill="none" stroke={color} stroke-width="4" stroke-linecap="round" stroke-dasharray={circ} stroke-dashoffset={dash} style="transition: stroke-dashoffset 0.6s ease" />
 						</svg>
 						<div class="flex flex-col">
-							<span class="text-sm font-black text-white leading-none">{storageQuota.pct}%</span>
+							<span class="text-sm font-black text-white leading-none">
+								{storageQuota.pct}%{#if storageQuota.persisted}<span class="ml-1 text-[10px] text-green-500" title="Storage is persisted — protected from eviction">◆</span>{/if}
+							</span>
 							<span class="text-[10px] text-gray-500 font-bold">
 								{storageQuota.usageMb >= 1024 ? (storageQuota.usageMb / 1024).toFixed(1) + " GB" : storageQuota.usageMb + " MB"} /
 								{storageQuota.quotaMb >= 1024 ? (storageQuota.quotaMb / 1024).toFixed(0) + " GB" : storageQuota.quotaMb + " MB"}

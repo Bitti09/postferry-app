@@ -1,5 +1,5 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth, tokenSecretsMap } from '$lib/server/oauth';
+import { oauth, takeTokenSecret } from '$lib/server/oauth';
 import { Client } from 'tumblr.js';
 import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
 import type { RequestHandler } from './$types';
@@ -12,18 +12,13 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		return new Response('Missing token or verifier', { status: 400 });
 	}
 
-	// Retrieve secret from Map or Cookie
-	let token_secret = tokenSecretsMap.get(oauth_token);
-	if (!token_secret) {
-		token_secret = cookies.get('oauth_token_secret') || undefined;
-	}
+	// Retrieve secret from the capped store or Cookie (also handles TTL expiry)
+	const token_secret = takeTokenSecret(oauth_token) ?? cookies.get('oauth_token_secret');
 
 	if (!token_secret) {
 		return new Response('Session expired or secret lost', { status: 400 });
 	}
 
-	// Clean up map
-	tokenSecretsMap.delete(oauth_token);
 	cookies.delete('oauth_token_secret', { path: '/' });
 
 	const requestData = {

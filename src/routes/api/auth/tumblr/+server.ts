@@ -1,5 +1,5 @@
 import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth, tokenSecretsMap } from '$lib/server/oauth';
+import { oauth, rememberTokenSecret } from '$lib/server/oauth';
 import { redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
@@ -37,9 +37,8 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		return new Response('Invalid response from Tumblr', { status: 500 });
 	}
 
-	// Store secret in Map
-	tokenSecretsMap.set(oauth_token, oauth_token_secret);
-	
+	// Store secret in the capped pending-secrets store
+	rememberTokenSecret(oauth_token, oauth_token_secret);
 	// Also store in cookie as a fallback/secondary mechanism
 	cookies.set('oauth_token_secret', oauth_token_secret, {
 		path: '/',

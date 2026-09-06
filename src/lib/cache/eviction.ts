@@ -49,7 +49,10 @@ export async function gcOrphanMedia(): Promise<{ deletedBlobs: number; deletedIn
 }
 
 /**
- * Evict oldest blobs (by cachedAt) until the cache fits under the cap.
+ * Evict oldest blobs (by cachedAt) until the cache fits under the caps.
+ * Byte-aware: rows with a known `size` consume the byte budget; unknown-size
+ * rows only consume an entry slot. Uses a streaming cursor with early exit
+ * instead of materializing the whole table.
  * Downloads currently in flight are skipped so we never delete a blob the
  * service worker is about to write.
  */
@@ -68,19 +71,26 @@ export async function enforceMediaCacheLimit(): Promise<number> {
 		// estimate unavailable — fall back to the entry cap only
 	}
 
-	const target = usage > MAX_BYTES ? EMERGENCY_TARGET : MAX_ENTRIES;
-	if (count <= target) return 0;
+	const emergency = usage > MAX_BYTES;
+	const entryTarget = emergency ? EMERGENCY_TARGET : MAX_ENTRIES;
+	if (count <= entryTarget && !emergency) return 0;
 
 	let active = new Set<string>();
 	activeDownloads.subscribe((value) => { active = value; })();
-	const entries = await db.mediaUrls.orderBy('cachedAt').toArray();
 
-	const toDelete: string[] = [];
-	for (const entry of entries) {
-		if (count - toDelete.length <= target) break;
-		if (active.has(entry.url)) continue;
+	// Streaming LRU walk: oldest first. Stop as soon as both budgets fit.
+	let toDelete: string[] = [];
+	let deletedBytes = 0;
+	let estimatedOverrun = emergency ? usage - MAX_BYTES : 0;
+
+	await db.mediaUrls.orderBy('cachedAt').each(entry => {
+		if (count - toDelete.length <= entryTarget && estimatedOverrun <= 0) return;
+		if (active.has(entry.url)) return;
 		toDelete.push(entry.url);
-	}
+		deletedBytes += entry.size ?? 0;
+		if (estimatedOverrun > 0) estimatedOverrun -= entry.size ?? 0;
+	});
+
 	if (toDelete.length === 0) return 0;
 
 	let deleted = 0;
