@@ -230,6 +230,13 @@ function armControllerWait(): void {
 	if (controllerWaitArmed || !browser) return;
 	const sw = navigator.serviceWorker;
 	if (!sw) return;
+	// Controller may already be set by the time this module loads (warm
+	// navigation) — controllerchange won't fire in that case, so report
+	// immediately.
+	if (sw.controller) {
+		console.log('[SW] Service worker is controlling the page (already active)');
+		return;
+	}
 	controllerWaitArmed = true;
 	sw.addEventListener('controllerchange', () => {
 		controllerWaitArmed = false;
@@ -242,6 +249,7 @@ function armControllerWait(): void {
 		}
 	});
 }
+
 
 export function requestMediaDownload(
 	url: string,

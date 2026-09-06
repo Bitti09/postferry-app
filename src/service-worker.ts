@@ -38,7 +38,15 @@ sw.addEventListener('activate', (event) => {
 		}
 	}
 
-	event.waitUntil(deleteOldCaches());
+	// Take control of open pages immediately on install/update — without
+	// this, the first page load after registration has no controller and
+	// media caching must wait for a reload.
+	event.waitUntil(
+		(async () => {
+			await deleteOldCaches();
+			await sw.clients.claim();
+		})()
+	);
 });
 
 sw.addEventListener('fetch', (event) => {
