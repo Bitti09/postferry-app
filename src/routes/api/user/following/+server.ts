@@ -7,12 +7,12 @@ interface FollowedBlog {
 
 /** Multi-account followed-blogs fetch. Per-account offset cursors. */
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
-	// Route fields ride on the account objects (single body read).
-	const offsets = accounts[0]?.offsets as Record<string, number> | undefined;
+	const { accounts } = body;
+	const offsets = body.offsets as Record<string, number> | undefined;
 	const results = await forAccounts(accounts, async (client, account) => {
 		const params: Record<string, unknown> = { limit: 20 };
 		const accountOffset = offsets?.[account.blogName];

@@ -7,19 +7,18 @@ import type { RequestHandler } from './$types';
  * first usable account's client.
  */
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Invalid account payload', { status: 400 });
 	}
+	const { accounts } = body;
 
-	// Route fields ride on the account objects (single body read — see
-	// readAccounts contract).
-	const body0 = accounts[0] as (typeof accounts)[number] & {
+	// Route fields are top-level in the request body (single body read).
+	const { query, before, type } = body as {
 		query?: string;
 		before?: string | number;
 		type?: string;
 	};
-	const { query, before, type } = body0 ?? {};
 
 	if (!query) {
 		return new Response('Query is required', { status: 400 });

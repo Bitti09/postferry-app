@@ -7,17 +7,16 @@ interface TumblrError extends Error {
 
 /** Reblog a post to the requesting account's blog. */
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
-	// Route fields ride on the account objects (single body read).
-	const first = accounts[0] as (typeof accounts)[number] & {
+	const { accounts } = body;
+	const { postId, reblogKey, comment } = body as {
 		postId?: string | number;
 		reblogKey?: string;
 		comment?: string;
 	};
-	const { postId, reblogKey, comment } = first ?? {};
 	if (!postId || !reblogKey) {
 		return new Response('Missing required parameters', { status: 400 });
 	}

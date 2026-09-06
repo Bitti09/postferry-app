@@ -12,17 +12,16 @@ interface TumblrError extends Error {
  */
 export const POST: RequestHandler = async ({ request }) => {
 	let action = 'like';
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
-	// Route fields ride on the account objects (single body read).
-	const first = accounts[0] as (typeof accounts)[number] & {
+	const { accounts } = body;
+	const { postId, reblogKey, action: reqAction } = body as {
 		postId?: string | number;
 		reblogKey?: string;
 		action?: string;
 	};
-	const { postId, reblogKey, action: reqAction } = first ?? {};
 	if (reqAction) {
 		action = reqAction;
 	}

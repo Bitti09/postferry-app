@@ -1,4 +1,4 @@
-import { forAccounts, readAccounts } from '$lib/server/clients';
+import { forAccounts, readAccounts, type AccountCredentials } from '$lib/server/clients';
 import type { RequestHandler } from './$types';
 
 interface DashboardPost {
@@ -8,17 +8,16 @@ interface DashboardPost {
 
 /** Multi-account dashboard merge. Per-account `before_id` cursors. */
 export const POST: RequestHandler = async ({ request }) => {
-	const accounts = await readAccounts(request);
-	if (!accounts || accounts.length === 0) {
+	const body = await readAccounts(request);
+	if (!body) {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
-
-	// Route fields ride along on the account objects (single body read —
-	// see readAccounts contract).
-	const first = accounts[0];
-	const offsets = first?.offsets as Record<string, string | number> | undefined;
-	const type = (first?.type as string | null | undefined) ?? null;
-	const since_id = first?.since_id as string | number | undefined;
+	const { accounts, offsets, type, since_id } = body as {
+		accounts: (AccountCredentials & Record<string, unknown>)[];
+		offsets?: Record<string, string | number>;
+		type?: string | null;
+		since_id?: string | number;
+	};
 
 	const results = await forAccounts(accounts, async (client, account) => {
 		const params: Record<string, unknown> = {
