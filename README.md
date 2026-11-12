@@ -1,69 +1,205 @@
-# sv
+# tmblr
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A multi-account Tumblr dashboard and offline media library built with
+SvelteKit 5.
 
-## Creating a project
+It merges the dashboards, likes, and followed blogs of several Tumblr accounts
+into one chronological feed, renders posts and notes, and keeps media available
+offline through a service worker, IndexedDB, and the Origin Private File System
+(OPFS).
 
-If you're seeing this, you've probably already done this step. Congrats!
+> **Unofficial project.** This app is not affiliated with, endorsed by, or
+> sponsored by Tumblr, Inc. or Automattic, Inc. “Tumblr” is a trademark of
+> Tumblr, Inc., used only to describe API compatibility. See
+> [Legal](#legal) below.
 
-```sh
-# create a new project
-npx sv create my-app
-```
+## Features
 
-To recreate this project with the same configuration:
+- **One merged feed** from any number of active Tumblr accounts, with
+  per-account `likedBy` / `rebloggedBy` state preserved through the merge.
+- **Likes, following, blog posts, blog likes, tag search, and post detail**
+  pages, with filters for text, photo, video, audio, quote, link, chat, and
+  asks.
+- **Offline media cache**: images and video are stored in OPFS with an
+  IndexedDB index, served through the service worker (including byte ranges
+  for video), and evicted by a size/entry LRU cap.
+- **Installable PWA** with an app-shell cache and an offline post view.
+- **Virtualized grid** and slideshow for large libraries.
+- **OAuth 1.0a sign-in** for multiple Tumblr accounts; tokens stay in the
+  browser and every Tumblr API call is proxied through server routes.
+- **No Tumblr-specific code in the UI layer**: all API access goes through the
+  separate [`postferry`](https://github.com/Bitti09/postferry) package.
 
-```sh
-# recreate this project
-npx sv@0.15.1 create --template minimal --types ts --add tailwindcss="plugins:typography" --install npm .
-```
+## Tech stack
 
-## Developing
+- SvelteKit 3 with Svelte 5 runes, TypeScript, Vite
+- Tailwind CSS 4 + daisyUI
+- Dexie (IndexedDB) for posts, accounts, settings, and the media index
+- OPFS for media blobs; service worker for the app shell and offline reads
+- [`postferry`](https://github.com/Bitti09/postferry) for the Tumblr API v2 and
+  NPF client
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Requirements
 
-```sh
-npm run dev
+- Node.js 22 or newer (developed on Node 24)
+- pnpm 12 or newer
+- A Tumblr OAuth application
+  ([register one](https://www.tumblr.com/oauth/apps))
+- Read access to the private `Bitti09/postferry` GitHub repository, because the
+  package is installed as a git dependency
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
-
-
-## API library (`postferry`)
-
-`postferry` is an unofficial, standalone, zero-runtime-dependency client for
-the Tumblr API v2 and NPF. It lives in its own repository and is installed as
-a GitHub dependency:
-
-- Repository: <https://github.com/Bitti09/postferry>
-- Package: `postferry`
-- License and disclaimer: see that repository's `README.md` and `LICENSE`.
-
-- Typed endpoints and NPF/legacy post types.
-- OAuth 1.0a (WebCrypto HMAC-SHA1), API-key and OAuth 2.0 bearer auth.
-- Correct pagination per endpoint (`offset`/`since_id` for the dashboard,
-  `before` timestamps for posts/likes/tagged, `/notes` for note pages).
-- Retries with `Retry-After`, bounded multi-account fan-out, and feed merging
-  that preserves per-account `likedBy`/`rebloggedBy`/`sources`.
+## Getting started
 
 ```sh
+git clone git@github.com:Bitti09/tmblr.git
+cd tmblr
 pnpm install
-pnpm check   # app typecheck
-pnpm build   # app build
+cp .env.example .env
 ```
 
-The package's own tests and build live in the `postferry` repository. The app
-has no local copy of the API package.
+Fill in the three values in `.env`:
+
+| Variable | Description |
+| --- | --- |
+| `TUMBLR_CONSUMER_KEY` | OAuth consumer key from your Tumblr app |
+| `TUMBLR_CONSUMER_SECRET` | OAuth consumer secret |
+| `TUMBLR_CALLBACK_URL` | The callback URL registered on the Tumblr app, exactly (scheme, host, path). For local development this is usually a tunnel such as `https://your-tunnel.example.com/api/auth/callback`; for production use `https://your-domain/api/auth/callback`. If unset, the app falls back to the request's forwarded scheme/host, which Tumblr will reject unless that URL is registered verbatim. |
+
+Start the dev server:
+
+```sh
+pnpm dev
+# open http://localhost:5173
+```
+
+Then use **Add Account** on the dashboard to complete the OAuth flow.
+
+## Scripts
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Start Vite in development mode |
+| `pnpm build` | Production build (client, server, and service worker) |
+| `pnpm preview` | Preview the production build |
+| `pnpm check` | `svelte-check` over the app |
+| `pnpm check:watch` | Typecheck in watch mode |
+| `pnpm prepare` | Regenerate SvelteKit types |
+
+The `postferry` package has its own test suite and build commands in its
+repository; the app has no local copy of that package.
+
+## Routes
+
+| Route | Purpose |
+| --- | --- |
+| `/` | Merged dashboard with filters, slideshow, and bulk media caching |
+| `/likes` | Merged likes from every active account |
+| `/following` | Blogs followed by each account |
+| `/accounts` | Connected accounts, activation, account info, and favourites caching |
+| `/search` | Tumblr tag search |
+| `/caches` | Offline media library, storage usage, filters, and cache clearing |
+| `/settings` | Layout, caching, and display preferences |
+| `/blog/[blogName]` | A blog's posts |
+| `/blog/[blogName]/likes` | A blog's public likes |
+| `/post/[blogName]/[postId]` | Post detail, trail, notes, likes, and offline media |
+| `/debug-cache`, `/debug-upscaler` | Development-only diagnostics |
+
+Server routes live under `src/routes/api/` and cover auth, dashboard, likes,
+posts, blog info/posts/likes, following, user info, search, avatar proxying,
+and media proxying.
+
+## How it works
+
+### API access
+
+The browser sends the serialized account credentials with each API request.
+The server routes validate the payload, call Tumblr through `postferry`, and
+return normalized data. OAuth request/access token exchanges happen in
+`src/routes/api/auth/` and are also handled by `postferry`. No Tumblr API call
+is made directly by the browser.
+
+### Multi-account merge
+
+Posts are keyed by `id_string`, never the lossy numeric `id`. The server merges
+the same post returned by multiple accounts into one object carrying
+`likedBy`, `rebloggedBy`, `seenBy`, `sources`, and the most recent
+`liked_timestamp`. The client keeps a stable `cachedAt` and a separate
+`updatedAt`, so cursor pagination cannot skip or repeat rows after a refresh.
+
+### Offline cache
+
+- Posts and metadata: Dexie database `tmblr-cache-new`, optionally inside a
+  persistent storage bucket.
+- Media: OPFS directory `media`, keyed by a deterministic hash of the URL.
+- App shell and navigation: service worker with an OPFS app directory.
+- Eviction: oldest media is removed first, capped at 20,000 entries / 4 GB,
+  with a stricter byte cap when the browser reports pressure.
+- Media URLs are recorded in `mediaUrls` so a post's blobs can be found without
+  re-parsing content.
+
+### Offline behavior
+
+Feeds require the network. The cached library (`/caches`), cached post detail,
+and cached media remain available offline. Use **Clear Cache** on `/caches` to
+delete posts and media, or remove an account from `/accounts`.
+
+## Data and privacy
+
+- Account tokens and cached posts are stored in the browser's IndexedDB; media
+  blobs are stored in OPFS. There is no application database or server-side
+  session store.
+- Tokens are sent to the app's own server routes so those routes can call
+  Tumblr on your behalf. Do not deploy this app on a host you do not trust.
+- Clearing site data or using **Clear Cache** removes local data. Uninstalling
+  the PWA may leave the origin's storage in place until the browser clears it.
+- The app requests persistent storage when available. Browsers decide whether
+  to grant it.
+
+## Deployment
+
+The project uses `@sveltejs/adapter-auto`. Install the adapter for your target
+(Node, Vercel, Netlify, Cloudflare, etc.) before deploying.
+
+Set `TUMBLR_CONSUMER_KEY`, `TUMBLR_CONSUMER_SECRET`, and
+`TUMBLR_CALLBACK_URL` in the hosting environment. The callback URL must match
+the Tumblr application configuration exactly. Serve over HTTPS so the service
+worker and OAuth callback work correctly.
+
+## Checks and build
+
+```sh
+pnpm check
+pnpm build
+```
+
+There is no app-level test runner; the API package is tested in
+[`Bitti09/postferry`](https://github.com/Bitti09/postferry).
+
+## API client
+
+The Tumblr client is maintained separately as
+[`postferry`](https://github.com/Bitti09/postferry). It provides typed methods
+for the documented v2 endpoints, OAuth 1.0a/OAuth 2.0, NPF and legacy post
+types, retries, multi-account fan-out, and feed merging. See its
+`API-COVERAGE.md` for the endpoint and NPF coverage map.
+
+## Legal
+
+This application is **not** official, endorsed, sponsored by, or otherwise
+associated with Tumblr in any way, shape, or form.
+
+It was built using the API reference documents, and like any other project
+built using the API (including those made using this app) should conform to the
+[Tumblr Application Developer and API License
+Agreement](https://www.tumblr.com/docs/api_agreement). Be sure you also follow
+it.
+
+“Tumblr” and the Tumblr logo are trademarks of Tumblr, Inc. They are used here
+only to describe API compatibility and do not imply endorsement. Do not use
+this project's name or branding to suggest an official Tumblr product.
+
+## License
+
+The application code in this repository has not declared a license yet. The
+separate `postferry` package is MIT-licensed; see its repository for the
+package license and the note about Tumblr content and trademarks.
