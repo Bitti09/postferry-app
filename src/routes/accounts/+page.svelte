@@ -74,7 +74,7 @@
 
 				if (!res.ok) {
 					if (res.status === 429) {
-						error = 'Tumblr API Rate Limit Exceeded. Cycle your VPN IP and click "Cache Favs" to resume.';
+						error = 'Tumblr API rate limit exceeded. Wait a few minutes and try again.';
 					} else {
 						const msg = await res.text();
 						error = `Failed to fetch likes: ${msg}`;

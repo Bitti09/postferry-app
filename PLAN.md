@@ -66,7 +66,7 @@ Dashboard, likes, and following already fan out per account (`accounts[]` payloa
 ## P5 — Misc
 
 - `tokenSecretsMap` unbounded (OAuth handshakes) → cap/expire entries.
-- Document that rate limiting is intentionally disabled (VPN/IP cycling, per user) — but keep the client-side account-fan cap from P3.3 as the politeness bound.
+- Historical note: rate limiting is now enforced server-side in `src/lib/server/rateLimiter.ts`; this item is resolved.
 - `.gitignore` `dev-smoke.err`; delete the stray file.
 - Lightbox `autoplay` video: add `muted` + `playsinline` (autoplay policy).
 

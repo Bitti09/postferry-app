@@ -1,4 +1,5 @@
 import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$app/env/private';
+import { checkRateLimit } from './rateLimiter';
 import {
 	TumblrClient,
 	fanOut,
@@ -37,7 +38,8 @@ export function clientFor(account: AccountCredentials): TumblrClient | null {
 			consumerSecret: TUMBLR_CONSUMER_SECRET,
 			token: account.token,
 			tokenSecret: account.secret,
-			userAgent: USER_AGENT
+			userAgent: USER_AGENT,
+			beforeRequest: checkRateLimit
 		});
 		if (clientCache.size > 64) clientCache.clear();
 		clientCache.set(cacheKey, client);

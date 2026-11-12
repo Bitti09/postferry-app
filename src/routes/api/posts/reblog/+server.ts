@@ -1,4 +1,5 @@
 import { forAccounts, readAccounts } from '#lib/server/clients';
+import { checkActionLimit } from '#lib/server/rateLimiter';
 import type { RequestHandler } from './$types';
 
 /** Reblog a post to the requesting account's blog. */
@@ -16,6 +17,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const results = await forAccounts(accounts, async (client, account) => {
+		checkActionLimit('posts', account.blogName);
 		return client.reblog(account.blogName, {
 			id: String(postId),
 			reblog_key: reblogKey,

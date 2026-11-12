@@ -1,4 +1,5 @@
 import { forAccounts, readAccounts } from '#lib/server/clients';
+import { checkActionLimit } from '#lib/server/rateLimiter';
 import type { RequestHandler } from './$types';
 
 /**
@@ -19,7 +20,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const params = { id: String(postId), reblog_key: reblogKey };
-	const results = await forAccounts(accounts, async (client) => {
+	const results = await forAccounts(accounts, async (client, account) => {
+		if (action === 'like') checkActionLimit('likes', account.blogName);
 		return action === 'unlike' ? client.unlike(params) : client.like(params);
 	});
 

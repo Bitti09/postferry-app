@@ -130,7 +130,10 @@ and media proxying.
 
 The browser sends the serialized account credentials with each API request.
 The server routes validate the payload, call Tumblr through `postferry`, and
-return normalized data. OAuth request/access token exchanges happen in
+return normalized data. Every outbound request is checked against the
+documented API quotas (300/minute, 1,000/hour, 5,000/day) and the per-user
+like/reblog limits; once a window is exhausted the server rejects further
+calls locally with a 429 instead of hammering Tumblr. OAuth request/access token exchanges happen in
 `src/routes/api/auth/` and are also handled by `postferry`. No Tumblr API call
 is made directly by the browser.
 

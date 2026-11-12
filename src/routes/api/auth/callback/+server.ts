@@ -1,7 +1,5 @@
 import { oauthClient, takeTokenSecret } from '#lib/server/oauth';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$app/env/private';
-import { TumblrClient } from 'postferry';
-import { USER_AGENT } from '#lib/server/clients';
+import { clientFor } from '#lib/server/clients';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
@@ -22,13 +20,8 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 	const access = await oauthClient.accessToken(oauthToken, tokenSecret, oauthVerifier);
 
-	const client = new TumblrClient({
-		consumerKey: TUMBLR_CONSUMER_KEY,
-		consumerSecret: TUMBLR_CONSUMER_SECRET,
-		token: access.token,
-		tokenSecret: access.tokenSecret,
-		userAgent: USER_AGENT
-	});
+	const client = clientFor({ blogName: '', token: access.token, secret: access.tokenSecret });
+	if (!client) return new Response('Could not create Tumblr client', { status: 500 });
 	const userInfo = await client.userInfo();
 	const blogName = userInfo.user.name;
 
