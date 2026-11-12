@@ -158,7 +158,7 @@
 	}
 </script>
 
-<div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
+<div class="h-[calc(100dvh-7.5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
 	{#if isOffline}
 		<div class="alert alert-warning shadow-lg mb-6">
 			<svg

@@ -506,7 +506,7 @@ async function loadOfflinePost() {
 	</style>
 </svelte:head>
 
-<div class="flex flex-col bg-black min-h-dvh xl:h-[calc(100dvh-64px)] xl:overflow-hidden">
+<div class="flex flex-col bg-black min-h-dvh xl:h-[calc(100dvh-104px)] xl:overflow-hidden">
 	<!-- Global Navigation -->
 	<div class="sticky top-0 z-50 bg-black/80 backdrop-blur-md border-b border-gray-800 px-4 py-3 flex items-center justify-between">
 		<button onclick={() => history.back()} class="btn btn-ghost btn-sm gap-2 text-white hover:bg-gray-800">

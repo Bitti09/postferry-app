@@ -71,6 +71,16 @@
 
 	let isCached = $derived(mediaInfo.allUrls.length === 0 || mediaInfo.allUrls.every(u => cachedMediaUrls.has(u)));
 	let postDetailHref = $derived(`/post/${post.blog_name}/${post.id_string || post.id}`);
+	let sourceUrl = $derived(post.source_url ?? '');
+	let sourceLabel = $derived.by(() => {
+		if (!sourceUrl) return '';
+		if (post.source_title) return post.source_title;
+		try {
+			return new URL(sourceUrl).hostname;
+		} catch {
+			return sourceUrl;
+		}
+	});
 	const DETAIL_ZONE_HEIGHT_PX = 132;
 
 	function openPostDetail() {
@@ -293,6 +303,20 @@
 		>
 			{post.blog_name}
 		</span>
+
+		{#if sourceLabel}
+			<a
+				href={sourceUrl}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="relative z-30 mt-0.5 block truncate text-[10px] text-gray-400 hover:text-gray-200"
+				title={sourceLabel}
+				onclick={(e) => e.stopPropagation()}
+			>
+				via {sourceLabel}
+			</a>
+		{/if}
+
 		<p class="text-xs text-gray-300 line-clamp-2 mt-1">{post.summary}</p>
 
 		<div class="mt-3 flex items-center justify-between gap-1 text-xs text-gray-400 relative z-30">

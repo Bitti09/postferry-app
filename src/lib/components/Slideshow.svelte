@@ -116,6 +116,17 @@
 	let upscalingForUrl = $state<string | null>(null);
 
 	let currentItem = $derived(flatMedia[currentIndex]);
+	let attributionUrl = $derived(currentItem?.post?.source_url ?? '');
+	let attributionLabel = $derived.by(() => {
+		if (!attributionUrl) return '';
+		const title = currentItem?.post?.source_title;
+		if (title) return title;
+		try {
+			return new URL(attributionUrl).hostname;
+		} catch {
+			return attributionUrl;
+		}
+	});
 
 	$effect(() => {
 		const item = currentItem;
@@ -359,6 +370,26 @@
 						style={fitToScreen ? '' : 'width: auto; height: auto; display: block;'}
 					/>
 				{/if}
+			{/if}
+
+			{#if currentItem}
+				<div
+					class="absolute bottom-6 left-1/2 z-30 max-w-[70%] -translate-x-1/2 rounded-lg bg-black/60 px-3 py-1.5 text-[11px] text-gray-200 backdrop-blur"
+					onclick={(e) => e.stopPropagation()}
+					role="presentation"
+				>
+					<span class="font-semibold text-white">{currentItem.post?.blog_name ?? ''}</span>
+					{#if attributionLabel}
+						<span class="text-gray-400"> · via </span>
+						<a
+							href={attributionUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="underline decoration-gray-500 underline-offset-2 hover:text-white"
+							onclick={(e) => e.stopPropagation()}
+						>{attributionLabel}</a>
+					{/if}
+				</div>
 			{/if}
 		</div>
 

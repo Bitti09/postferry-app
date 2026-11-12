@@ -198,7 +198,7 @@
 	}
 </script>
 
-<div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
+<div class="h-[calc(100dvh-7.5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
 	<header class="mb-8 shrink-0 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="text-3xl font-bold text-white tracking-tight flex items-center gap-3">

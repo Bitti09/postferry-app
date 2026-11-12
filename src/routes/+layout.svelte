@@ -69,4 +69,12 @@
 	<main class="flex-1">
 		{@render children()}
 	</main>
+	<footer class="shrink-0 border-t border-gray-800 px-4 py-2.5 text-center text-[11px] text-gray-400">
+		Unofficial client · <a
+			href="https://www.tumblr.com"
+			target="_blank"
+			rel="noopener noreferrer"
+			class="underline decoration-gray-600 underline-offset-2 hover:text-gray-300"
+		>Powered by Tumblr</a>
+	</footer>
 </div>
