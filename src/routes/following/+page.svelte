@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { browser } from '$app/environment';
-	import { accounts } from '$lib/stores/accounts';
-	import AvatarImage from '$lib/components/AvatarImage.svelte';
-	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
+	import { browser } from '$app/env';
+	import { accounts } from '#lib/stores/accounts';
+	import AvatarImage from '#lib/components/AvatarImage.svelte';
+	import InfiniteScroll from '#lib/components/InfiniteScroll.svelte';
 
-	import { getCachedBlogInfo, setCachedBlogInfo, loadAllFollowedBlogLists, saveFollowedBlogsForAccount } from '$lib/cache';
+	import { getCachedBlogInfo, setCachedBlogInfo, loadAllFollowedBlogLists, saveFollowedBlogsForAccount } from '#lib/cache';
 
-	import { settings } from '$lib/stores/settings';
-	import type { TumblrAccount } from '$lib/types';
+	import { settings } from '#lib/stores/settings';
+	import type { TumblrAccount } from '#lib/types';
 	import {
 		Users,
 		User,
@@ -258,7 +258,7 @@
 
 	<div class="flex-1 overflow-y-auto pr-2 pb-20">
 		{#if $accounts.length === 0}
-			<div class="hero min-h-[50vh] rounded-3xl bg-base-200">
+			<div class="hero min-h-[50dvh] rounded-3xl bg-base-200">
 				<div class="hero-content text-center">
 					<div class="max-w-md">
 						<h1 class="text-5xl font-bold text-white">No accounts yet</h1>
@@ -384,7 +384,7 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => selectedDebugBlog = null}>
-		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-2xl max-h-[80dvh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
 			<div class="flex items-center justify-between border-b border-gray-800 pb-4 mb-4">
 				<h3 class="text-lg font-bold text-white font-mono">@{selectedDebugBlog.name} Raw API JSON</h3>
 				<button class="btn btn-sm btn-circle btn-ghost text-gray-400 hover:text-white" onclick={() => selectedDebugBlog = null}>✕</button>
@@ -400,7 +400,7 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onclick={() => showPageDebug = false}>
-		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
+		<div class="bg-gray-900 border border-gray-800 rounded-3xl p-6 w-full max-w-4xl max-h-[85dvh] flex flex-col shadow-2xl" onclick={e => e.stopPropagation()}>
 			<div class="flex items-center justify-between border-b border-gray-800 pb-4 mb-4">
 				<h3 class="text-lg font-bold text-white font-mono">Page API Response ({followedBlogs.length} Blogs)</h3>
 				<button class="btn btn-sm btn-circle btn-ghost text-gray-400 hover:text-white" onclick={() => showPageDebug = false}>✕</button>

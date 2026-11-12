@@ -1,8 +1,8 @@
 // ─── Settings store ─────────────────────────────────────────────────────────
 
 import { writable } from 'svelte/store';
-import { browser } from '$app/environment';
-import { loadSettings, saveSettings, DEFAULT_SETTINGS, type Settings } from '$lib/cache/meta';
+import { browser } from '$app/env';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS, type Settings } from '#lib/cache/meta';
 
 export { DEFAULT_SETTINGS, type Settings };
 

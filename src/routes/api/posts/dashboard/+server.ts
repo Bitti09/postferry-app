@@ -1,76 +1,86 @@
-import { forAccounts, readAccounts, type AccountCredentials } from '$lib/server/clients';
+import { forAccounts, readAccounts, type AccountCredentials } from '#lib/server/clients';
+import { mergeFeedPosts, postId, type DashboardParams, type PostType, type TumblrPost } from 'postferry';
 import type { RequestHandler } from './$types';
 
-interface DashboardPost {
-	id: number | string;
-	timestamp: number;
-}
-
-/** Multi-account dashboard merge. Per-account `before_id` cursors. */
+/**
+ * Multi-account dashboard merge.
+ *
+ * Per the current API docs `/user/dashboard` paginates with `offset` and
+ * `since_id`; it has no `before_id` parameter. The client therefore keeps a
+ * numeric offset per account for older pages and a `since_id` per account for
+ * refreshes.
+ */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await readAccounts(request);
 	if (!body) {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
-	const { accounts, offsets, type, since_id } = body as {
-		accounts: (AccountCredentials & Record<string, unknown>)[];
-		offsets?: Record<string, string | number>;
-		type?: string | null;
-		since_id?: string | number;
-	};
+	const { accounts } = body;
+	const offsets = (body.offsets ?? {}) as Record<string, string | number>;
+	const sinceIds = (body.since_ids ?? {}) as Record<string, string | number>;
+	const type = body.type as PostType | null | undefined;
 
 	const results = await forAccounts(accounts, async (client, account) => {
-		const params: Record<string, unknown> = {
+		const params: DashboardParams = {
 			limit: 20,
 			npf: true,
 			reblog_info: true
 		};
-		if (type) {
-			params.type = type;
+		if (type) params.type = type;
+
+		const sinceId = sinceIds[account.blogName];
+		const offset = offsets[account.blogName];
+		if (sinceId) {
+			params.since_id = sinceId;
+		} else if (offset !== undefined && offset !== null) {
+			params.offset = Number(offset);
 		}
-		if (since_id) {
-			// Top-up refresh: only posts newer than what we already have.
-			params.since_id = since_id.toString();
-		} else {
-			const accountOffset = offsets?.[account.blogName];
-			if (accountOffset) {
-				params.before_id = accountOffset.toString();
-			}
-		}
+
 		const data = await client.userDashboard(params);
-		const posts = (data.posts ?? []) as DashboardPost[];
+		const posts = (data.posts ?? []) as TumblrPost[];
+		const numericOffset = Number(offset ?? 0);
 		return {
 			posts,
-			// Newest post id per account for since_id top-ups.
-			newSinceId: posts.length > 0 ? posts[0].id.toString() : undefined,
-			// Oldest post id per account for downward pagination.
-			newBeforeId: posts.length > 0 ? posts[posts.length - 1].id.toString() : undefined
+			// Newest id for the next refresh. Numeric max keeps this correct
+			// regardless of response ordering.
+			newSinceId: posts.length > 0 ? maxPostId(posts) : undefined,
+			// Next older page.
+			newOffset: posts.length > 0 ? numericOffset + posts.length : undefined
 		};
 	});
 
-	const allPosts = results.flatMap((r) => (r.ok ? r.value!.posts : []));
+	const batches = results.flatMap((result) =>
+		result.ok && result.value ? [{ account: result.accountBlogName, posts: result.value.posts }] : []
+	);
+	const posts = mergeFeedPosts(batches, 'timestamp');
 
-	// Deduplicate and sort by timestamp descending.
-	const uniquePostsMap = new Map<string, DashboardPost>();
-	for (const post of allPosts) {
-		uniquePostsMap.set(post.id.toString(), post);
-	}
-	const sortedPosts = Array.from(uniquePostsMap.values()).sort((a, b) => b.timestamp - a.timestamp);
-
-	const newOffsets: Record<string, string> = {};
+	const newOffsets: Record<string, number> = {};
 	const newSinceIds: Record<string, string> = {};
-	for (const r of results) {
-		if (!r.ok || !r.value) continue;
-		if (r.value.newBeforeId) newOffsets[r.accountBlogName] = r.value.newBeforeId;
-		if (r.value.newSinceId) newSinceIds[r.accountBlogName] = r.value.newSinceId;
+	for (const result of results) {
+		if (!result.ok || !result.value) continue;
+		if (result.value.newOffset !== undefined) newOffsets[result.accountBlogName] = result.value.newOffset;
+		if (result.value.newSinceId) newSinceIds[result.accountBlogName] = result.value.newSinceId;
 	}
 
-	return new Response(JSON.stringify({
-		posts: sortedPosts,
+	return Response.json({
+		posts,
 		newOffsets,
 		newSinceIds,
 		accountResponses: results
-	}), {
-		headers: { 'Content-Type': 'application/json' }
 	});
 };
+
+function maxPostId(posts: ReadonlyArray<TumblrPost>): string {
+	let best = posts[0]!;
+	for (const post of posts) {
+		if (comparePostId(post, best) > 0) best = post;
+	}
+	return postId(best);
+}
+
+function comparePostId(a: TumblrPost, b: TumblrPost): number {
+	const left = postId(a);
+	const right = postId(b);
+	if (left.length !== right.length) return left.length - right.length;
+	return left < right ? -1 : left > right ? 1 : 0;
+}

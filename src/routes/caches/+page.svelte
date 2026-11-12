@@ -1,22 +1,28 @@
 <script lang="ts">
-	import { onMount, untrack, onDestroy } from 'svelte';
-	import { browser } from '$app/environment';
-	import { settings } from '$lib/stores/settings';
-	import { getCachedPostsPage, clearCache, getMediaCacheStats } from '$lib/cache';
-	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
-	import type { PostFilter } from '$lib/postFilter';
-	import PostCard from '$lib/components/PostCard.svelte';
-	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import Slideshow from '$lib/components/Slideshow.svelte';
-	import type { TumblrPost } from '$lib/types';
-	import { ArrowLeft, Trash2, HardDrive, Play, Filter, Layers, Image as ImageIcon, Video, Heart, UserSquare, Library } from '@lucide/svelte';
+	import { onMount, untrack } from 'svelte';
+	import { browser } from '$app/env';
+	import { settings } from '#lib/stores/settings';
+	import { getCachedPostsPage, clearCache, getMediaCacheStats } from '#lib/cache';
+	import { refreshUnreferencedPosts } from '#lib/stores/unreferencedPosts';
+	import type { PostFilter } from '#lib/postFilter';
+	import PostGrid from '#lib/components/PostGrid.svelte';
+	import InfiniteScroll from '#lib/components/InfiniteScroll.svelte';
+	import Slideshow from '#lib/components/Slideshow.svelte';
+	import { postId, type TumblrPost } from '#lib/types';
+	import { ArrowLeft, Trash2, HardDrive, Play, Filter, Layers, Image as ImageIcon, Video, Music, Quote, Link as LinkIcon, MessageSquare, HelpCircle, FileText, Heart, UserSquare, Library } from '@lucide/svelte';
 
 	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
 		{ value: 'all', label: 'All', icon: Layers },
 		{ value: 'photo', label: 'Photos', icon: ImageIcon },
-		{ value: 'video', label: 'Videos', icon: Video }
+		{ value: 'video', label: 'Videos', icon: Video },
+		{ value: 'audio', label: 'Audio', icon: Music },
+		{ value: 'quote', label: 'Quotes', icon: Quote },
+		{ value: 'link', label: 'Links', icon: LinkIcon },
+		{ value: 'chat', label: 'Chat', icon: MessageSquare },
+		{ value: 'answer', label: 'Asks', icon: HelpCircle },
+		{ value: 'text', label: 'Text', icon: FileText }
 	];
-	
+
 	const SOURCE_FILTERS: { value: 'all' | 'faves' | 'blogs'; label: string; icon: any }[] = [
 		{ value: 'all', label: 'All Sources', icon: Library },
 		{ value: 'faves', label: 'Faves', icon: Heart },
@@ -24,132 +30,28 @@
 	];
 
 	const PAGE_SIZE = 100;
-	type PostCursor = { cachedAt: number; id: number; sortTimestamp?: number } | null;
+	type PostCursor = { cachedAt: number; id: string; sortTimestamp?: number } | null;
 
 	let posts: TumblrPost[] = $state([]);
 	let loading = $state(true);
 	let loadingMore = $state(false);
-	
 	let total = $state(0);
 	let nextCursor = $state<PostCursor>(null);
 	let hasMore = $derived(nextCursor !== null);
 	let error = $state('');
-	
 	let loadToken = 0;
 
 	let cacheStats = $state({ count: 0, estimatedMb: 0 });
 	let storageQuota = $state({ usageMb: 0, quotaMb: 0, pct: 0, persisted: false });
 
 	let slideshowActive = $state(false);
-	let activeSlideshowPostId = $state<string | number | null>(null);
-	let slideshowStartPostId = $state<string | number | null>(null);
+	let activeSlideshowPostId = $state<string | null>(null);
+	let slideshowStartPostId = $state<string | null>(null);
 	let slideshowStartMediaUrl = $state<string | null>(null);
-	let gridContainer = $state<HTMLElement | null>(null);
-
-	const GRID_GAP_PX = 16;
-	const VIRTUAL_OVERSCAN_ROWS = 8;
-
-	let viewportWidth = $state(0);
-	let viewportHeight = $state(0);
-	let scrollY = $state(0);
-	let gridTop = $state(0);
-	let gridWidth = $state(0);
-
-	function getAutoColumnCount(width: number): number {
-		if (width >= 1536) return 7;
-		if (width >= 1280) return 6;
-		if (width >= 1024) return 5;
-		if (width >= 768) return 4;
-		if (width >= 640) return 3;
-		if (width >= 480) return 2;
-		return 1;
-	}
-
-	let columnCount = $derived.by(() => {
-		const configured = $settings.mediaColumns;
-		if (configured !== 'auto') {
-			const parsed = Number.parseInt(configured, 10);
-			if (Number.isFinite(parsed) && parsed > 0) return parsed;
-		}
-		const width = viewportWidth || (browser ? window.innerWidth : 1024);
-		return getAutoColumnCount(width);
-	});
 
 	let currentFilter = $state<PostFilter>('all');
 	let currentSourceFilter = $state<'all' | 'faves' | 'blogs'>('all');
 
-	let rowCount = $derived(Math.ceil(posts.length / columnCount));
-	let cardWidth = $derived.by(() => {
-		if (columnCount <= 0 || gridWidth <= 0) return 0;
-		return Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
-	});
-	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
-	let rowStride = $derived(rowHeight + GRID_GAP_PX);
-	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
-
-	let viewportTopWithinGrid = $derived(Math.max(0, scrollY - gridTop));
-	let viewportBottomWithinGrid = $derived(viewportTopWithinGrid + viewportHeight);
-
-	let visibleStartRow = $derived.by(() => {
-		if (rowStride <= 0) return 0;
-		return Math.max(0, Math.floor(viewportTopWithinGrid / rowStride) - VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleEndRow = $derived.by(() => {
-		if (rowStride <= 0) return -1;
-		return Math.min(rowCount - 1, Math.ceil(viewportBottomWithinGrid / rowStride) + VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleRows = $derived.by(() => {
-		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
-			return [] as { row: number; posts: TumblrPost[] }[];
-		}
-
-		const rows: { row: number; posts: TumblrPost[] }[] = [];
-		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
-			const startIndex = row * columnCount;
-			const postsInRow = posts.slice(startIndex, startIndex + columnCount);
-			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
-		}
-		return rows;
-	});
-
-	function updateViewportMetrics() {
-		if (!browser) return;
-		viewportWidth = window.innerWidth;
-		viewportHeight = window.innerHeight;
-		scrollY = window.scrollY;
-	}
-
-	function updateGridMetrics() {
-		if (!browser || !gridContainer) return;
-		const rect = gridContainer.getBoundingClientRect();
-		gridTop = window.scrollY + rect.top;
-		gridWidth = rect.width;
-	}
-
-	function refreshVirtualMetrics() {
-		updateViewportMetrics();
-		updateGridMetrics();
-	}
-
-	$effect(() => {
-		if (!slideshowActive && activeSlideshowPostId) {
-			const el = document.getElementById(`post-${activeSlideshowPostId}`);
-			if (el) {
-				el.scrollIntoView({ behavior: 'instant', block: 'center' });
-			} else if (browser && rowStride > 0) {
-				const postIndex = posts.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
-				if (postIndex >= 0) {
-					const row = Math.floor(postIndex / columnCount);
-					const targetTop = Math.max(0, gridTop + row * rowStride - 120);
-					window.scrollTo({ top: targetTop, behavior: 'instant' });
-				}
-			}
-			activeSlideshowPostId = null;
-		}
-	});
-	
 	async function refreshStorageQuota() {
 		if (!navigator.storage?.estimate) return;
 		const { usage = 0, quota = 1 } = await navigator.storage.estimate();
@@ -169,7 +71,12 @@
 		};
 	}
 
-	async function loadPage(opts: { before?: PostCursor | null; append: boolean; filter: PostFilter; sourceFilter: 'all' | 'faves' | 'blogs' }) {
+	async function loadPage(opts: {
+		before?: PostCursor | null;
+		append: boolean;
+		filter: PostFilter;
+		sourceFilter: 'all' | 'faves' | 'blogs';
+	}) {
 		const token = ++loadToken;
 		const result = await getCachedPostsPage({
 			limit: PAGE_SIZE,
@@ -177,13 +84,13 @@
 			filter: opts.filter,
 			sourceFilter: opts.sourceFilter
 		});
-		
+
 		if (token !== loadToken) return;
 
 		if (opts.append) {
-			posts = [...posts, ...result.entries.map((e) => e.post)];
+			posts = [...posts, ...result.entries.map((entry) => entry.post)];
 		} else {
-			posts = result.entries.map((e) => e.post);
+			posts = result.entries.map((entry) => entry.post);
 		}
 		total = result.total;
 		nextCursor = (result.nextCursor as PostCursor | null) ?? null;
@@ -194,13 +101,18 @@
 		error = '';
 		try {
 			await Promise.all([
-				loadPage({ before: null, append: false, filter: currentFilter, sourceFilter: currentSourceFilter }),
-				getMediaCacheStats().then((s) => (cacheStats = s))
+				loadPage({
+					before: null,
+					append: false,
+					filter: currentFilter,
+					sourceFilter: currentSourceFilter
+				}),
+				getMediaCacheStats().then((stats) => (cacheStats = stats))
 			]);
 			await refreshStorageQuota();
 			await refreshUnreferencedPosts();
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : String(caught);
 		} finally {
 			loading = false;
 		}
@@ -210,9 +122,14 @@
 		if (loadingMore || !hasMore || nextCursor === null) return;
 		loadingMore = true;
 		try {
-			await loadPage({ before: nextCursor, append: true, filter: currentFilter, sourceFilter: currentSourceFilter });
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			await loadPage({
+				before: nextCursor,
+				append: true,
+				filter: currentFilter,
+				sourceFilter: currentSourceFilter
+			});
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : String(caught);
 		} finally {
 			loadingMore = false;
 		}
@@ -223,28 +140,27 @@
 		const source = currentSourceFilter;
 		untrack(() => {
 			if (browser) {
-				loadPage({ before: null, append: false, filter, sourceFilter: source }).catch(e => {
-					error = e instanceof Error ? e.message : String(e);
+				loadPage({ before: null, append: false, filter, sourceFilter: source }).catch((caught) => {
+					error = caught instanceof Error ? caught.message : String(caught);
 				});
 			}
 		});
 	});
 
 	function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
-		slideshowStartPostId = post?.id ?? null;
+		slideshowStartPostId = postId(post);
 		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
 	function offlineHref(post: TumblrPost): string {
 		const blog = post?.blog_name;
-		const id = post?.id;
-		if (!blog || id === undefined || id === null) return "#";
-		return `/post/${blog}/${id}?offline=1`;
+		if (!blog) return '#';
+		return `/post/${blog}/${postId(post)}?offline=1`;
 	}
 
 	async function handleClear() {
-		if (!confirm("Clear all cached posts and blobs?")) return;
+		if (!confirm('Clear all cached posts and blobs?')) return;
 		await clearCache();
 		posts = [];
 		total = 0;
@@ -261,53 +177,28 @@
 	}
 
 	function onVisibilityChange() {
-		if (document.visibilityState === "visible") {
-			void refreshAll();
-		}
+		if (document.visibilityState === 'visible') void refreshAll();
 	}
 
-	onMount(() => {
-		if (browser) {
-			void refreshAll();
-			const onResize = () => refreshVirtualMetrics();
-			const onScroll = () => { scrollY = window.scrollY; };
-
-			window.addEventListener('resize', onResize);
-			window.addEventListener('scroll', onScroll, { passive: true });
-			document.addEventListener("visibilitychange", onVisibilityChange);
-
-			const resizeObserver = new ResizeObserver(() => {
-				updateGridMetrics();
-			});
-			if (gridContainer) {
-				resizeObserver.observe(gridContainer);
-			}
-
-			requestAnimationFrame(() => {
-				refreshVirtualMetrics();
-			});
-
-			return () => {
-				window.removeEventListener('resize', onResize);
-				window.removeEventListener('scroll', onScroll);
-				document.removeEventListener("visibilitychange", onVisibilityChange);
-				resizeObserver.disconnect();
-			};
+	$effect(() => {
+		if (!slideshowActive && activeSlideshowPostId) {
+			const element = document.getElementById(`post-${activeSlideshowPostId}`);
+			element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+			activeSlideshowPostId = null;
 		}
 	});
 
-	$effect(() => {
-		gridContainer;
-		posts.length;
-		columnCount;
+	onMount(() => {
 		if (!browser) return;
-		requestAnimationFrame(() => {
-			updateGridMetrics();
-		});
+		void refreshAll();
+		document.addEventListener('visibilitychange', onVisibilityChange);
+		return () => {
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		};
 	});
 </script>
 
-<div class="min-h-screen p-4 md:p-8 bg-black">
+<div class="min-h-dvh p-4 md:p-8 bg-black">
 	<header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div class="flex items-center gap-4">
 			<button onclick={() => history.back()} class="btn btn-circle btn-ghost text-white">
@@ -419,32 +310,13 @@
 		{/if}
 
 		<main>
-			<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
-				{#if cardWidth > 0}
-					{#each visibleRows as rowItem (rowItem.row)}
-						<div
-							class="absolute"
-							style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
-						>
-							<div
-								class="grid"
-								style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
-							>
-								{#each rowItem.posts as post (post.id)}
-									<div id={"post-" + post.id}>
-										<a href={offlineHref(post)} class="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl" title="Open from offline cache" data-sveltekit-preload-data="off">
-											<PostCard {post} mode="cache" onMediaClick={(p, url) => { 
-												// intercept click to prevent navigation if it was meant to open slideshow
-												openSlideshowFromPost(p, url);
-											}} />
-										</a>
-									</div>
-								{/each}
-							</div>
-						</div>
-					{/each}
-				{/if}
-			</div>
+			<PostGrid
+				posts={posts}
+				columnSetting={$settings.mediaColumns}
+				mode="cache"
+				hrefFor={offlineHref}
+				onMediaClick={openSlideshowFromPost}
+			/>
 		</main>
 
 		{#if posts.length === 0 && total > 0}

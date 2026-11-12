@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { upscaleImage } from '$lib/upscaleImage';
+	import { upscaleImage } from '#lib/upscaleImage';
 
 	let srcUrl = $state<string | null>(null);
 	let originalWidth = $state(0);
@@ -178,43 +178,43 @@
 	<div class="p-6 bg-slate-800 rounded-lg flex flex-col gap-4 shadow-lg border border-slate-700">
 		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
 			<div class="col-span-1 md:col-span-2">
-				<label class="block font-medium mb-2 text-slate-300">Upload Source Image (Small image recommended)</label>
-				<input type="file" accept="image/*" onchange={onFileChange} class="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 cursor-pointer" />
+				<label for="upload-source" class="block font-medium mb-2 text-slate-300">Upload Source Image (Small image recommended)</label>
+				<input type="file" id="upload-source" accept="image/*" onchange={onFileChange} class="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 cursor-pointer" />
 			</div>
 			<div>
-				<label class="block font-medium mb-2 text-slate-300 flex justify-between">
+				<label for="target-scale" class="block font-medium mb-2 text-slate-300 flex justify-between">
 					<span>Target Scale Factor</span>
 					<span class="font-bold text-indigo-400">{targetScale.toFixed(1)}x</span>
 				</label>
-				<input type="range" min="1.1" max="10.0" step="0.1" bind:value={targetScale} class="w-full accent-indigo-500" />
+				<input type="range" min="1.1" max="10.0" step="0.1" bind:value={targetScale} id="target-scale" class="w-full accent-indigo-500" />
 			</div>
 			<div>
-				<label class="block font-medium mb-2 text-slate-300 flex justify-between">
+				<label for="view-zoom" class="block font-medium mb-2 text-slate-300 flex justify-between">
 					<span>View Zoom</span>
 					<span class="font-bold text-indigo-400">{viewZoom.toFixed(2)}x</span>
 				</label>
-				<input type="range" min="0.1" max="2.0" step="0.05" bind:value={viewZoom} class="w-full accent-indigo-500" />
+				<input type="range" min="0.1" max="2.0" step="0.05" bind:value={viewZoom} id="view-zoom" class="w-full accent-indigo-500" />
 			</div>
 			<div>
-				<label class="block font-medium mb-2 text-slate-300 flex justify-between">
+				<label for="lanczos-radius" class="block font-medium mb-2 text-slate-300 flex justify-between">
 					<span>Lanczos Radius</span>
 					<span class="font-bold text-indigo-400">{lanczosRadius}</span>
 				</label>
-				<input type="range" min="2" max="5" step="1" bind:value={lanczosRadius} class="w-full accent-indigo-500" />
+				<input type="range" min="2" max="5" step="1" bind:value={lanczosRadius} id="lanczos-radius" class="w-full accent-indigo-500" />
 			</div>
 			<div>
-				<label class="block font-medium mb-2 text-slate-300 flex justify-between">
+				<label for="unsharp-amount" class="block font-medium mb-2 text-slate-300 flex justify-between">
 					<span>Unsharp Mask Amt</span>
 					<span class="font-bold text-indigo-400">{unsharpAmount.toFixed(1)}</span>
 				</label>
-				<input type="range" min="0.0" max="3.0" step="0.1" bind:value={unsharpAmount} class="w-full accent-indigo-500" />
+				<input type="range" min="0.0" max="3.0" step="0.1" bind:value={unsharpAmount} id="unsharp-amount" class="w-full accent-indigo-500" />
 			</div>
 			<div>
-				<label class="block font-medium mb-2 text-slate-300 flex justify-between">
+				<label for="unsharp-radius" class="block font-medium mb-2 text-slate-300 flex justify-between">
 					<span>Unsharp Radius</span>
 					<span class="font-bold text-indigo-400">{unsharpRadius.toFixed(1)}</span>
 				</label>
-				<input type="range" min="0.5" max="10.0" step="0.5" bind:value={unsharpRadius} class="w-full accent-indigo-500" />
+				<input type="range" min="0.5" max="10.0" step="0.5" bind:value={unsharpRadius} id="unsharp-radius" class="w-full accent-indigo-500" />
 			</div>
 		</div>
 		
@@ -251,7 +251,7 @@
 			<div 
 				bind:this={canvas2dContainer} 
 				onscroll={onScroll}
-				class="w-full h-[55vh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
+				class="w-full h-[55dvh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
 			>
 			</div>
 		</div>
@@ -264,7 +264,7 @@
 			<div 
 				bind:this={webglContainer} 
 				onscroll={onScroll}
-				class="w-full h-[55vh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
+				class="w-full h-[55dvh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
 			>
 			</div>
 		</div>
@@ -277,7 +277,7 @@
 			<div 
 				bind:this={webglUnsharpContainer} 
 				onscroll={onScroll}
-				class="w-full h-[55vh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
+				class="w-full h-[55dvh] bg-slate-900/80 rounded-xl overflow-auto border border-slate-700 shadow-inner flex items-start justify-start cursor-grab active:cursor-grabbing custom-scrollbar"
 			>
 			</div>
 		</div>
@@ -286,19 +286,8 @@
 
 <style>
 	/* Custom scrollbar for better UI */
-	.custom-scrollbar::-webkit-scrollbar {
-		width: 10px;
-		height: 10px;
-	}
-	.custom-scrollbar::-webkit-scrollbar-track {
-		background: rgba(15, 23, 42, 0.5); 
-		border-radius: 8px;
-	}
-	.custom-scrollbar::-webkit-scrollbar-thumb {
-		background: rgba(99, 102, 241, 0.4); 
-		border-radius: 8px;
-	}
-	.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-		background: rgba(99, 102, 241, 0.6); 
+	.custom-scrollbar {
+		scrollbar-width: thin;
+		scrollbar-color: rgb(99 102 241 / 0.4) rgb(15 23 42 / 0.5);
 	}
 </style>

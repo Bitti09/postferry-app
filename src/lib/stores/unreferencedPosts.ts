@@ -10,27 +10,15 @@
 // list can be sorted without re-walking storage.
 
 import { writable, type Readable } from 'svelte/store';
-import { browser } from '$app/environment';
-import { findUnreferencedPosts } from '$lib/cache/posts';
+import { browser } from '$app/env';
+import { findUnreferencedPosts, type UnreferencedPostSummary } from '#lib/cache/posts';
 import { accounts } from './accounts';
-import { getCachedFollowedBlogs } from '$lib/cache/meta';
-import type { TumblrBlog } from '$lib/types';
+import { getCachedFollowedBlogs } from '#lib/cache/meta';
+import type { TumblrBlog } from '#lib/types';
 
-// Slim shape used by the caches page badges. The cursor walks on the
-// storage side; the page only ever holds these summaries in memory.
-// CoreStorage is migrating `findUnreferencedPosts` to return this directly;
-// until that lands we map the legacy `CachedPostEntry` shape into it.
-type SlimEntry = {
-	id: number;
-	blogName: string;
-	timestamp?: number;
-	cachedAt: number;
-	summary?: string;
-	type?: string;
-	tags?: string[];
-};
-
-export type UnreferencedPostSummary = SlimEntry;
+// The storage cursor returns only the fields the caches page renders, so a
+// 10k-post library never materializes as full CachedPostEntry objects in JS.
+export type { UnreferencedPostSummary };
 
 export interface UnreferencedState {
 	entries: UnreferencedPostSummary[];
@@ -60,26 +48,7 @@ export async function refreshUnreferencedPosts(): Promise<void> {
 			const followedBlogs = await getCachedFollowedBlogs();
 			const followed = new Set<string>(followedBlogs.map((b: TumblrBlog) => b?.name).filter(Boolean));
 			const accountBlogs = new Set<string>($accountsState.map((a) => a.blogName).filter(Boolean));
-			// Returns slim summaries, not full CachedPostEntry. The cursor walks
-			// happen on the storage side; the page only ever holds summaries in
-			// memory.
-			// CoreStorage will rename the return to `UnreferencedPostSummary[]`;
-			// until that lands we map the legacy `CachedPostEntry` shape into the
-			// slim fields we actually need here.
-			const raw = (await findUnreferencedPosts(followed, accountBlogs)) as unknown as Array<{
-				post?: { id?: number; type?: string; tags?: string[]; summary?: string; timestamp?: number };
-				cachedAt?: number;
-				cachedFromBlog?: string;
-			}>;
-			const entries: UnreferencedPostSummary[] = raw.map((e) => ({
-				id: Number(e.post?.id ?? 0),
-				blogName: String(e.cachedFromBlog ?? ''),
-				timestamp: e.post?.timestamp,
-				cachedAt: e.cachedAt ?? Date.now(),
-				summary: e.post?.summary,
-				type: e.post?.type,
-				tags: e.post?.tags
-			}));
+			const entries = await findUnreferencedPosts(followed, accountBlogs);
 			internal.set({ entries, scanning: false, lastScannedAt: Date.now() });
 		} catch (e) {
 			console.warn('[storage] refreshUnreferencedPosts failed', e);

@@ -1,14 +1,13 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 import { db } from './newDb';
+import { clearMediaFiles } from '#lib/mediaFiles';
 import { resetMediaCacheStatus } from '../mediaCacheStatus.svelte.ts';
 
 export async function clearCache(): Promise<void> {
 	if (!browser) return;
-	
-	if (window.caches) {
-		await caches.delete('tmblr-media');
-	}
-	
+
+	await clearMediaFiles();
+
 	const tablesToClear = [db.posts, db.mediaUrls, db.meta, db.avatars, db.blogInfos];
 	await db.transaction('rw', tablesToClear, async () => {
 		for (const table of tablesToClear) {
@@ -20,10 +19,8 @@ export async function clearCache(): Promise<void> {
 
 export async function clearMediaCache(): Promise<void> {
 	if (!browser) return;
-	
-	if (window.caches) {
-		await caches.delete('tmblr-media');
-	}
+
+	await clearMediaFiles();
 	await db.mediaUrls.clear();
 	resetMediaCacheStatus();
 }

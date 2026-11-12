@@ -1,7 +1,7 @@
 import Dexie, { type Table } from 'dexie';
-import type { TumblrPost, TumblrNote, TumblrAccount, TumblrUser, TumblrBlog } from '$lib/types';
-import { browser } from '$app/environment';
-import { getAppBucketIdb } from './buckets';
+import type { TumblrPost, TumblrNote, TumblrAccount, TumblrUser, TumblrBlog } from '#lib/types';
+import { browser } from '$app/env';
+import { getOfflineBucketIdb } from './buckets';
 
 export interface NoteTotals {
 	likes: number;
@@ -11,12 +11,18 @@ export interface NoteTotals {
 }
 
 export interface CachedPostEntry {
-	id: number;
+	/** Canonical string post id (`id_string`); never the lossy numeric id. */
+	id: string;
 	post: TumblrPost;
+	/** First time this post entered the cache. Stable across refreshes. */
 	cachedAt: number;
+	/** Last time the row was written (post metadata or notes). */
+	updatedAt?: number;
 	cachedFromBlog: string;
+	/** Every account/blog that surfaced this post. */
+	sources: string[];
 	likedBy: Record<string, boolean>;
-	rebloggedBy?: Record<string, boolean>;
+	rebloggedBy: Record<string, boolean>;
 	notes?: TumblrNote[];
 	noteTotals?: NoteTotals;
 	sortTimestamp?: number;
@@ -24,7 +30,8 @@ export interface CachedPostEntry {
 
 export interface StoredMediaUrl {
 	url: string;
-	postId: number;
+	/** Canonical string post id, or '0' for legacy unidentified media. */
+	postId: string;
 	type: string;
 	/** Epoch ms the blob entered the offline cache. Used as LRU order for eviction; 0 = pre-v3 rows. */
 	cachedAt?: number;
@@ -77,7 +84,7 @@ export function mediaAssetBase(url: string): string {
 }
 
 export class TmblrCacheDB extends Dexie {
-	posts!: Table<CachedPostEntry, number>;
+	posts!: Table<CachedPostEntry, string>;
 	mediaUrls!: Table<StoredMediaUrl, string>;
 	meta!: Table<{ key: string; value: any }, string>;
 	avatars!: Table<CachedAvatar, string>;
@@ -124,20 +131,111 @@ export class TmblrCacheDB extends Dexie {
 				if (m.base == null) m.base = mediaAssetBase(m.url);
 			});
 		});
+		this.version(5).stores({
+			// Post ids become strings: Tumblr ids are 64-bit and `Number(id)`
+			// silently loses precision above 2^53. `id_string` is canonical.
+			posts: 'id, cachedAt, [cachedFromBlog+cachedAt], cachedFromBlog, sortTimestamp, updatedAt',
+			mediaUrls: 'url, postId, cachedAt, base'
+		}).upgrade(async tx => {
+			const posts = tx.table('posts');
+			const rows = await posts.toArray();
+			await posts.clear();
+			for (const row of rows) {
+				const id = String(row.post?.id_string ?? row.id);
+				const sources = Array.isArray(row.sources)
+					? row.sources
+					: row.cachedFromBlog
+						? [row.cachedFromBlog]
+						: [];
+				await posts.put({
+					...row,
+					id,
+					sources,
+					updatedAt: row.updatedAt ?? row.cachedAt
+				});
+			}
+			await tx
+				.table('mediaUrls')
+				.toCollection()
+				.modify((m) => {
+					if (m.postId != null) m.postId = String(m.postId);
+				});
+		});
 	}
 }
 
-export const db = new TmblrCacheDB();
+/* ── one-time move of the origin database into the persistent bucket ────── */
 
-// Route the Dexie database into the persisted `app-data` storage bucket
-// (Chromium 122+). Dexie resolves `dependencies.indexedDB` on first open, so
-// injecting at module load is safe: every DB call is async and happens after
-// this microtask. Fallback browsers keep the default origin IDB.
+const DB_NAME = 'tmblr-cache-new';
+const MIGRATED_FLAG = 'offline-bucket-db-migrated-v1';
+
+async function dbExists(factory: IDBFactory, name: string): Promise<boolean> {
+	try {
+		const databases = await factory.databases?.();
+		return !!databases?.some((entry) => entry.name === name);
+	} catch {
+		return false;
+	}
+}
+
+function deleteOriginDb(): Promise<void> {
+	return new Promise((resolve) => {
+		try {
+			const request = indexedDB.deleteDatabase(DB_NAME);
+			request.onsuccess = () => resolve();
+			request.onerror = () => resolve();
+			request.onblocked = () => resolve();
+		} catch {
+			resolve();
+		}
+	});
+}
+
+/**
+ * Copy an existing origin database into the bucket. Runs once, before the
+ * exported `db` is opened, so every later query hits the bucket.
+ */
+async function migrateDbToBucket(bucketIdb: IDBFactory): Promise<void> {
+	if (!(await dbExists(indexedDB, DB_NAME))) return;
+	if (!localStorage.getItem(MIGRATED_FLAG)) {
+		if (!(await dbExists(bucketIdb, DB_NAME))) {
+			// `globalThis.indexedDB` is always the origin factory, even after a
+			// dev HMR re-evaluation has installed the bucket factory globally.
+			Dexie.dependencies.indexedDB = indexedDB;
+			const source = new TmblrCacheDB();
+			await source.open();
+
+			Dexie.dependencies.indexedDB = bucketIdb;
+			const target = new TmblrCacheDB();
+			await target.open();
+			for (const table of source.tables) {
+				const rows = await table.toArray();
+				if (rows.length > 0) await target.table(table.name).bulkPut(rows);
+			}
+			source.close();
+			target.close();
+		}
+		localStorage.setItem(MIGRATED_FLAG, '1');
+	}
+	await deleteOriginDb();
+}
+
 if (browser) {
-	void (async () => {
-		const bucketIdb = await getAppBucketIdb();
+	// Top-level await: the bucket IDB factory must be installed before the
+	// exported Dexie instance opens, otherwise it silently opens in the origin
+	// namespace — which is exactly the split this replaces.
+	try {
+		const bucketIdb = await getOfflineBucketIdb();
 		if (bucketIdb) {
+			await migrateDbToBucket(bucketIdb);
 			Dexie.dependencies.indexedDB = bucketIdb;
 		}
-	})();
+	} catch (e) {
+		// A failed migration must not brick startup; keep using origin storage.
+		console.error('[storage] bucket DB migration failed; using origin IDB', e);
+		Dexie.dependencies.indexedDB = indexedDB;
+	}
 }
+
+/* Constructed only after the bucket factory is installed. */
+export const db = new TmblrCacheDB();

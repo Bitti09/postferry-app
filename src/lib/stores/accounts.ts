@@ -3,9 +3,9 @@
 // via debounced `saveAllAccounts` (single-tx put+delete, not clear+put).
 
 import { writable, type Writable } from 'svelte/store';
-import { browser } from '$app/environment';
-import { loadAllAccounts, saveAllAccounts } from '$lib/cache/meta';
-import type { TumblrAccount } from '$lib/types';
+import { browser } from '$app/env';
+import { loadAllAccounts, saveAllAccounts } from '#lib/cache/meta';
+import type { TumblrAccount } from '#lib/types';
 
 const DEBOUNCE_MS = 300;
 
@@ -75,7 +75,9 @@ function createAccountsStore() {
 export const accounts = createAccountsStore();
 
 if (browser) {
+	// `pagehide` is the modern, bfcache-friendly unload signal. `beforeunload`
+	// is deliberately not used: it disables the back/forward cache and is
+	// redundant for best-effort persistence.
 	const flush = () => accounts.flush();
 	addEventListener('pagehide', flush);
-	addEventListener('beforeunload', flush);
 }

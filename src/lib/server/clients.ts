@@ -1,5 +1,12 @@
-import { Client } from 'tumblr.js';
-import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$env/static/private';
+import { TUMBLR_CONSUMER_KEY, TUMBLR_CONSUMER_SECRET } from '$app/env/private';
+import {
+	TumblrClient,
+	fanOut,
+	okValues,
+	type AccountResult
+} from 'postferry';
+
+export type { AccountResult } from 'postferry';
 
 export interface AccountCredentials {
 	blogName: string;
@@ -7,29 +14,30 @@ export interface AccountCredentials {
 	secret?: string;
 }
 
-export interface AccountResult<T> {
-	accountBlogName: string;
-	ok: boolean;
-	/** Defined only when ok. */
-	value?: T;
-	/** Defined only when !ok. */
-	error?: string;
+export interface ParsedAccountsBody {
+	/** Normalized: `accounts[]`. */
+	accounts: (AccountCredentials & Record<string, unknown>)[];
+	/** Route-specific fields (blogName, postId, offsets, ...) verbatim. */
+	[key: string]: unknown;
 }
 
-// One tumblr.js Client per token set — constructing clients is cheap but
-// a busy multi-account session rebuilds them on every request otherwise.
-const clientCache = new Map<string, Client>();
+export const USER_AGENT = 'tmblr/0.0.1 (+https://github.com/tmblr)';
 
-export function clientFor(account: AccountCredentials): Client | null {
+// One client per token set. Constructing clients is cheap, but a busy
+// multi-account session would otherwise rebuild the WebCrypto keys per request.
+const clientCache = new Map<string, TumblrClient>();
+
+export function clientFor(account: AccountCredentials): TumblrClient | null {
 	if (!account.token || !account.secret) return null;
 	const cacheKey = `${account.token}:${account.secret}`;
 	let client = clientCache.get(cacheKey);
 	if (!client) {
-		client = new Client({
-			consumer_key: TUMBLR_CONSUMER_KEY,
-			consumer_secret: TUMBLR_CONSUMER_SECRET,
+		client = new TumblrClient({
+			consumerKey: TUMBLR_CONSUMER_KEY,
+			consumerSecret: TUMBLR_CONSUMER_SECRET,
 			token: account.token,
-			token_secret: account.secret
+			tokenSecret: account.secret,
+			userAgent: USER_AGENT
 		});
 		if (clientCache.size > 64) clientCache.clear();
 		clientCache.set(cacheKey, client);
@@ -37,30 +45,34 @@ export function clientFor(account: AccountCredentials): Client | null {
 	return client;
 }
 
-export interface ParsedAccountsBody {
-	/** Normalized: `accounts[]`, or `[account]` when a single-account payload. */
-	accounts: (AccountCredentials & Record<string, unknown>)[];
-	/** Route-specific fields (blogName, postId, offsets, ...) verbatim. */
-	[key: string]: unknown;
+/**
+ * API-key client for endpoints that document API-key auth (notes, tagged,
+ * blog info/posts). Using OAuth also works, but a key-only client avoids
+ * needing a token for public reads and matches the documentation exactly.
+ */
+let apiKeyClient: TumblrClient | null = null;
+
+export function publicClient(): TumblrClient {
+	if (!apiKeyClient) {
+		apiKeyClient = new TumblrClient({
+			auth: { type: 'apiKey', consumerKey: TUMBLR_CONSUMER_KEY },
+			userAgent: USER_AGENT
+		});
+	}
+	return apiKeyClient;
 }
 
 /**
- * Read the request body EXACTLY once and normalize the account list.
- * Accepts `{ accounts: [...] }` (multi-account) or `{ account: {...} }`
- * (legacy single-account). Returns the whole parsed body so callers
- * destructure route-specific fields from the top level — the body cannot
- * be read again ("Body has already been read" throws otherwise).
- * Returns null on malformed JSON or an absent/empty account list.
+ * Read the request body EXACTLY once and validate the account list.
+ * Every route takes one shape: `{ accounts: [...] }`. Returns the whole
+ * parsed body so callers destructure route-specific fields from the top
+ * level — the body cannot be read again ("Body has already been read").
  */
 export async function readAccounts(request: Request): Promise<ParsedAccountsBody | null> {
 	try {
 		const body = (await request.json()) as Record<string, unknown>;
-		const raw = Array.isArray(body.accounts)
-			? body.accounts
-			: body.account
-				? [body.account]
-				: null;
-		if (!raw || raw.length === 0) return null;
+		const raw = body.accounts;
+		if (!Array.isArray(raw) || raw.length === 0) return null;
 		return { ...body, accounts: raw as (AccountCredentials & Record<string, unknown>)[] };
 	} catch {
 		return null;
@@ -68,32 +80,28 @@ export async function readAccounts(request: Request): Promise<ParsedAccountsBody
 }
 
 /**
- * Run `fn` for each account in parallel with per-account error isolation.
- * Failures become `{ ok: false, error }` entries — one expired token never
- * takes down the whole multi-account page.
+ * Run `fn` for each account with bounded concurrency and per-account error
+ * isolation. One expired token never takes down the whole multi-account page.
  */
 export async function forAccounts<T>(
 	accounts: AccountCredentials[],
-	fn: (client: Client, account: AccountCredentials) => Promise<T>
+	fn: (client: TumblrClient, account: AccountCredentials) => Promise<T>
 ): Promise<AccountResult<T>[]> {
-	return Promise.all(
-		accounts.map(async (account): Promise<AccountResult<T>> => {
+	return fanOut(
+		accounts,
+		async (account) => {
 			const client = clientFor(account);
-			if (!client) {
-				return { accountBlogName: account.blogName, ok: false, error: 'missing credentials' };
-			}
+			if (!client) throw new Error('missing credentials');
 			try {
-				return { accountBlogName: account.blogName, ok: true, value: await fn(client, account) };
-			} catch (e) {
-				const message = e instanceof Error ? e.message : String(e);
-				console.error(`[forAccounts] ${account.blogName}:`, message);
-				return { accountBlogName: account.blogName, ok: false, error: message };
+				return await fn(client, account);
+			} catch (error) {
+				// Keep the server log readable without leaking tokens.
+				console.error(`[forAccounts] ${account.blogName}:`, error instanceof Error ? error.message : error);
+				throw error;
 			}
-		})
+		},
+		{ concurrency: 5 }
 	);
 }
 
-/** Collect the successful values from a forAccounts result. */
-export function okValues<T>(results: AccountResult<T>[]): T[] {
-	return results.flatMap((r) => (r.ok && r.value !== undefined ? [r.value] : []));
-}
+export { okValues };

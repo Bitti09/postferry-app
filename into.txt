@@ -1,0 +1,1 @@
+Standard-Callback-URL: https://stockier-deacon-nonintelligently.ngrok-free.dev/api/auth/callback

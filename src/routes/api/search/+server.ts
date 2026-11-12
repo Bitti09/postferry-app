@@ -1,56 +1,44 @@
-import { forAccounts, readAccounts } from '$lib/server/clients';
+import { publicClient, readAccounts } from '#lib/server/clients';
+import type { PostFormatFilter, TumblrPost } from 'postferry';
 import type { RequestHandler } from './$types';
 
 /**
- * Tagged search. The /tagged endpoint is api-key-scoped (not account-scoped),
- * so we accept the multi-account payload for API uniformity but use only the
- * first usable account's client.
+ * Tagged search. `/tagged` is API-key scoped, so accounts are accepted for
+ * payload uniformity but not required for authentication. The endpoint has no
+ * `type` parameter; filtering happens client-side with the shared predicate.
  */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await readAccounts(request);
 	if (!body) {
 		return new Response('Invalid account payload', { status: 400 });
 	}
-	const { accounts } = body;
 
-	// Route fields are top-level in the request body (single body read).
-	const { query, before, type } = body as {
-		query?: string;
-		before?: string | number;
-		type?: string;
-	};
-
+	const query = body.query as string | undefined;
+	const before = body.before;
+	const filter = body.filter as PostFormatFilter | undefined;
 	if (!query) {
 		return new Response('Query is required', { status: 400 });
 	}
 
 	const cleanQuery = query.startsWith('#') ? query.substring(1) : query;
 
-	const results = await forAccounts(accounts, async (client) => {
-		const params: Record<string, unknown> = {
+	try {
+		const result = await publicClient().tagged(cleanQuery, {
 			limit: 20,
 			npf: true,
-			reblog_info: true
-		};
-		if (before) {
-			params.before = before.toString();
-		}
-		if (type && type !== 'all') {
-			params.type = type;
-		}
-		return client.taggedPosts(cleanQuery, params);
-	});
+			...(before !== undefined && before !== null ? { before: Number(before) } : {}),
+			...(filter === 'text' || filter === 'raw' ? { filter } : {})
+		});
+		// The documented response is an array; tolerate the older `{posts}`
+		// wrapper some proxies return.
+		const posts = (Array.isArray(result)
+			? result
+			: ((result as { posts?: TumblrPost[] }).posts ?? [])) as TumblrPost[];
 
-	const first = results.find((r) => r.ok);
-	if (!first) {
-		const error = results.find((r) => r.error)?.error ?? 'No usable account';
-		return new Response(error, { status: 502 });
+		return Response.json({ posts });
+	} catch (error: unknown) {
+		console.error('Search failed:', error);
+		const status = (error as { status?: number }).status ?? 502;
+		return new Response(error instanceof Error ? error.message : 'Search failed', { status });
 	}
-
-	const data = first.value as { posts?: unknown[] } | unknown[] | null;
-	const posts = (Array.isArray(data) ? data : data?.posts) ?? [];
-
-	return new Response(JSON.stringify({ posts, response: data }), {
-		headers: { 'Content-Type': 'application/json' }
-	});
 };

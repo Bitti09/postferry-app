@@ -1,23 +1,24 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import CachedMedia from './CachedMedia.svelte';
-	
-	let { 
-		active = $bindable(false), 
-		mediaUrl = '', 
+	import { postId } from '#lib/types';
+
+	let {
+		active = $bindable(false),
+		mediaUrl = '',
 		isVideo = false,
 		items = [],
 		currentIndex = 0,
 		activePostId = $bindable<string | number | null>(null)
-	} = $props<{ 
-		active?: boolean, 
-		mediaUrl?: string, 
+	}: {
+		active?: boolean,
+		mediaUrl?: string,
 		isVideo?: boolean,
 		items?: { url: string, type: string, post?: any }[],
 		currentIndex?: number,
 		activePostId?: string | number | null
-	}>();
-	
+	} = $props();
+
 	let current = $state(0);
 
 	$effect(() => {
@@ -28,13 +29,13 @@
 
 	$effect(() => {
 		if (active && items.length > 0 && items[current] && items[current].post) {
-			activePostId = items[current].post.id;
+			activePostId = postId(items[current].post);
 		}
 	});
 
 	let displayUrl = $derived(items.length > 0 ? items[current].url : mediaUrl);
 	let displayIsVideo = $derived(items.length > 0 ? items[current].type.startsWith("video/") : isVideo);
-	
+
 	function close() {
 		active = false;
 	}
@@ -52,7 +53,7 @@
 			current = (current - 1 + items.length) % items.length;
 		}
 	}
-	
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') close();
 		if (e.key === 'ArrowRight') next();
@@ -63,12 +64,12 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if active}
-	<div 
+	<div
 		role="presentation"
 		class="fixed inset-0 z-200 flex items-center justify-center bg-black/95 backdrop-blur-sm"
 		onclick={close}
 	>
-		<button 
+		<button
 			class="absolute top-6 right-6 w-12 h-12 rounded-full bg-white/10 hover:bg-white/25 border border-white/10 text-white text-2xl font-bold flex items-center justify-center transition-all z-210"
 			onclick={(e) => { e.stopPropagation(); close(); }}
 			aria-label="Close"
@@ -82,22 +83,22 @@
 				<ChevronRight size={32} />
 			</button>
 		{/if}
-		
+
 		{#if displayIsVideo}
 			<div role="presentation" onclick={(e) => e.stopPropagation()}>
-				<CachedMedia 
-					url={displayUrl} 
-					type="video/mp4" 
-					class="w-screen h-screen object-contain" 
-					autoplay={true} 
+				<CachedMedia
+					url={displayUrl}
+					type="video/mp4"
+					class="w-dvw h-dvh object-contain"
+					autoplay={true}
 				/>
 			</div>
 		{:else}
 			<div role="presentation" onclick={(e) => e.stopPropagation()}>
-				<CachedMedia 
-					url={displayUrl} 
-					type="image/jpeg" 
-					class="w-screen h-screen object-contain select-none" 
+				<CachedMedia
+					url={displayUrl}
+					type="image/jpeg"
+					class="w-dvw h-dvh object-contain select-none"
 				/>
 			</div>
 		{/if}

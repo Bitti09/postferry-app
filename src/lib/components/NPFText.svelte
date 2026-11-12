@@ -13,7 +13,7 @@
 		formats: NpfFormat[];
 	};
 
-	let { text = "", formatting = [] } = $props<{ text: string; formatting?: NpfFormat[] }>();
+	let { text = "", formatting = [] }: { text: string; formatting?: NpfFormat[] } = $props();
 
 	// Split text into segments based on formatting boundaries
 	let segments = $derived.by(() => {
@@ -57,13 +57,14 @@
 		this={linkFmt || mentionFmt ? 'a' : 'span'}
 		href={linkFmt ? linkFmt.url : mentionFmt ? `/blog/${mentionFmt.blog?.name}` : undefined}
 		target={linkFmt ? '_blank' : undefined}
+		rel={linkFmt ? 'noopener noreferrer' : undefined}
 		class:font-bold={isBold}
 		class:italic={isItalic}
 		class:line-through={isStrike}
 		class:text-xs={isSmall}
 		class:text-primary={mentionFmt}
 		class:underline={linkFmt}
-		class:hover:text-primary-focus={linkFmt || mentionFmt}
+		class:hover:text-primary={linkFmt || mentionFmt}
 		class:transition-colors={linkFmt || mentionFmt}
 		style={colorFmt ? `color: ${colorFmt.hex};` : ''}
 	>{segment.text}</svelte:element>

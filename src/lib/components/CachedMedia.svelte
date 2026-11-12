@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { activeDownloads } from '$lib/stores/downloads';
-	import type { TumblrPost } from '$lib/types';
+	import { activeDownloads } from '#lib/stores/downloads';
+	import type { TumblrPost } from '#lib/types';
 	import { onMount } from 'svelte';
 	import { Loader2 } from '@lucide/svelte';
 
-	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', thumbnailMode = false, autoCacheEnabled = true, onUnavailable, post, autoplay = false, cacheOnly = false } = $props<{
+	let { url, type = 'image', alt = '', class: className = '', style = '', posterUrl = '', thumbnailMode = false, autoCacheEnabled = true, onUnavailable, post, autoplay = false, cacheOnly = false }: {
 		url: string;
 		type?: string;
 		alt?: string;
@@ -18,7 +18,7 @@
 		post?: TumblrPost;
 		autoplay?: boolean;
 		cacheOnly?: boolean;
-	}>();
+	} = $props();
 
 	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
 

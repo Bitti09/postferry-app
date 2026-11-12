@@ -1,52 +1,39 @@
-import { forAccounts, readAccounts } from '$lib/server/clients';
+import { forAccounts, readAccounts } from '#lib/server/clients';
 import type { RequestHandler } from './$types';
 
-interface TumblrError extends Error {
-	statusCode?: number;
-}
-
 /**
- * Like/unlike a post. Accepts both the single-account and multi-account
- * payload shapes; the action is performed by every account that carries
- * credentials (the UI sends one account per click, batch sends fan out).
+ * Like/unlike a post for every account with credentials.
+ * The UI sends one account per click; batch sends fan out.
  */
 export const POST: RequestHandler = async ({ request }) => {
-	let action = 'like';
 	const body = await readAccounts(request);
 	if (!body) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
 	const { accounts } = body;
-	const { postId, reblogKey, action: reqAction } = body as {
-		postId?: string | number;
-		reblogKey?: string;
-		action?: string;
-	};
-	if (reqAction) {
-		action = reqAction;
-	}
+	const action = (body.action as string | undefined) ?? 'like';
+	const postId = body.postId as string | number | undefined;
+	const reblogKey = body.reblogKey as string | undefined;
 	if (!postId || !reblogKey) {
 		return new Response('Missing required parameters', { status: 400 });
 	}
 
+	const params = { id: String(postId), reblog_key: reblogKey };
 	const results = await forAccounts(accounts, async (client) => {
-		if (action === 'unlike') {
-			return client.unlikePost(postId.toString(), reblogKey);
-		}
-		return client.likePost(postId.toString(), reblogKey);
+		return action === 'unlike' ? client.unlike(params) : client.like(params);
 	});
 
-	const succeeded = results.filter((r) => r.ok);
+	const succeeded = results.filter((result) => result.ok);
 	if (succeeded.length === 0) {
-		const first = results.find((r) => r.error);
-		const status = 502;
-		return new Response(first?.error ?? 'All like actions failed', {
-			status,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		const first = results.find((result) => result.error);
+		return Response.json(
+			{ error: first?.error ?? 'All like actions failed' },
+			{ status: 502 }
+		);
 	}
 
-	return new Response(JSON.stringify({ success: true, accounts: succeeded.map((r) => r.accountBlogName) }), {
-		headers: { 'Content-Type': 'application/json' }
+	return Response.json({
+		success: true,
+		accounts: succeeded.map((result) => result.accountBlogName)
 	});
 };

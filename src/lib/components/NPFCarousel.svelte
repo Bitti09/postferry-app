@@ -1,5 +1,5 @@
 <script lang="ts">
-	let { images = [] } = $props<{ images: any[] }>();
+	let { images = [] }: { images: any[] } = $props();
 	
 	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
 	const proxied = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? toProxyUrl(u) : u);
@@ -43,7 +43,7 @@
 			<img 
 				src={proxied(imgUrl)} 
 				alt="Post content" 
-				class="w-full max-h-[90vh] object-contain block mx-auto"
+				class="w-full max-h-[90dvh] object-contain block mx-auto"
 				loading="lazy"
 			/>
 			{#if block.caption}
@@ -69,7 +69,7 @@
 						loading={i < 4 ? "eager" : "lazy"}
 					/>
 					{#if block.caption}
-						<div class="absolute bottom-0 inset-x-0 p-2 bg-gradient-to-t from-black/90 to-transparent">
+						<div class="absolute bottom-0 inset-x-0 p-2 bg-linear-to-t from-black/90 to-transparent">
 							<p class="text-xs text-white line-clamp-2">{@html block.caption}</p>
 						</div>
 					{/if}
@@ -91,7 +91,7 @@
 		<img 
 			src={proxied(lightboxUrl)} 
 			alt="Fullscreen" 
-			class="w-screen h-screen object-contain select-none"
+			class="w-dvw h-dvh object-contain select-none"
 		/>
 
 		<!-- Prev / Next in lightbox -->
