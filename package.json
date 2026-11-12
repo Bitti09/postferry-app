@@ -3,6 +3,10 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
+	"imports": {
+		"#lib": "./src/lib",
+		"#lib/*": "./src/lib/*"
+	},
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
@@ -12,30 +16,25 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
 	"devDependencies": {
-		"@sveltejs/adapter-auto": "^7.0.1",
-		"@sveltejs/kit": "^2.70.3",
-		"@sveltejs/vite-plugin-svelte": "^7.3.0",
+		"@sveltejs/adapter-auto": "^8.0.0",
+		"@sveltejs/kit": "^3.1.1",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@tailwindcss/typography": "^0.5.20",
 		"@tailwindcss/vite": "^4.3.3",
-		"@types/node": "^26.4.1",
-		"@vite-pwa/sveltekit": "^1.1.0",
-		"daisyui": "^5.7.28",
+		"@types/node": "^26.6.6",
+		"daisyui": "^5.7.50",
 		"jimp": "^1.6.1",
-		"svelte": "^5.57.0",
-		"svelte-check": "^4.7.6",
+		"svelte": "^5.57.3",
+		"svelte-check": "^4.7.8",
 		"tailwindcss": "4.3.3",
-		"typescript": "^6.0.3",
-		"vite": "^8.2.2",
-		"workbox-precaching": "^7.4.1",
-		"workbox-window": "^7.4.1",
-		"workbox-build": "^7.4.1"
+		"typescript": "~6.0.3",
+		"vite": "^8.3.5"
 	},
 	"dependencies": {
-		"@lucide/svelte": "^1.41.0",
+		"@lucide/svelte": "^1.66.0",
 		"clsx": "^2.1.1",
-		"dexie": "^4.4.5",
-		"oauth-1.0a": "^2.2.6",
-		"tailwind-merge": "^3.6.0",
-		"tumblr.js": "^5.0.1"
+		"dexie": "^4.4.7",
+		"postferry": "github:Bitti09/postferry",
+		"tailwind-merge": "^3.7.0"
 	}
 }

@@ -1,11 +1,15 @@
-import { browser } from '$app/environment';
-import type { TumblrPost } from '$lib/types';
-import { openMediaCache } from './buckets';
-import { db } from './newDb';
+import { browser } from '$app/env';
+import type { TumblrPost } from '#lib/types';
+import { db, mediaAssetBase } from './newDb';
+import {
+	readMediaFile,
+	deleteMediaFile,
+	listMediaFiles
+} from '#lib/mediaFiles';
 import { cachedMediaUrls, dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 
 export interface BlobPostMeta {
-	id: number;
+	id: string;
 	blogName: string;
 	timestamp: number;
 	summary: string;
@@ -14,7 +18,7 @@ export interface BlobPostMeta {
 }
 
 export interface SlimMediaMeta {
-	postId: number;
+	postId: string;
 	blogName: string;
 	timestamp: number;
 	post?: TumblrPost;
@@ -23,18 +27,27 @@ export interface SlimMediaMeta {
 
 export interface MediaRef { url: string; type: string; size: number }
 
-const CACHE_NAME = 'tmblr-media';
-
-export async function getMediaCache(): Promise<Cache | null> {
-	return openMediaCache();
+/** Record a media URL in the index once its file is on disk. */
+export async function indexStoredMedia(
+	url: string,
+	postId: string,
+	type: string,
+	size: number
+): Promise<void> {
+	await db.mediaUrls.put({
+		url,
+		postId,
+		type,
+		cachedAt: Date.now(),
+		size,
+		base: mediaAssetBase(url)
+	});
 }
 
 export async function isMediaCached(url: string): Promise<boolean> {
 	if (!browser || !url) return false;
-	const cache = await getMediaCache();
-	if (!cache) return false;
-	const match = await cache.match(url);
-	return !!match;
+	if (cachedMediaUrls.has(url)) return true;
+	return (await readMediaFile(url)) !== null;
 }
 
 export async function bulkIsMediaCached(urls: ReadonlyArray<string>): Promise<Set<string>> {
@@ -42,9 +55,6 @@ export async function bulkIsMediaCached(urls: ReadonlyArray<string>): Promise<Se
 	if (!browser || urls.length === 0) return cached;
 	const unique = [...new Set(urls.filter(Boolean))];
 
-	// Fast path: the global registry is warmed from cache.keys() at app start
-	// and updated on every cache completion, so most URLs never touch the
-	// Cache API again.
 	for (const url of unique) {
 		if (cachedMediaUrls.has(url)) cached.add(url);
 	}
@@ -52,16 +62,13 @@ export async function bulkIsMediaCached(urls: ReadonlyArray<string>): Promise<Se
 	const unknown = unique.filter((url) => !cached.has(url));
 	if (unknown.length === 0) return cached;
 
-	const cache = await getMediaCache();
-	if (!cache) return cached;
-
-	// Cache API has no bulk match; chunk the fan-out so a 10k-url page load
-	// doesn't open 10k concurrent IDB-backed lookups.
+	// OPFS stat per unknown URL; chunk so a 10k-url page load does not open
+	// 10k directory handles at once.
 	const CHUNK = 64;
 	for (let i = 0; i < unknown.length; i += CHUNK) {
 		const chunk = unknown.slice(i, i + CHUNK);
 		await Promise.all(chunk.map(async (url) => {
-			if (await cache.match(url)) {
+			if (await readMediaFile(url)) {
 				cached.add(url);
 				cachedMediaUrls.add(url);
 			}
@@ -71,75 +78,65 @@ export async function bulkIsMediaCached(urls: ReadonlyArray<string>): Promise<Se
 	return cached;
 }
 
-export async function getMediaForPost(postId: number): Promise<MediaRef[]> {
-	if (!browser || !Number.isFinite(postId)) return [];
-	const mediaUrls = await db.mediaUrls.where('postId').equals(postId).toArray();
-	
-	const cache = await getMediaCache();
-	if (!cache) return [];
-	
+export async function getMediaForPost(postId: string | number): Promise<MediaRef[]> {
+	if (!browser) return [];
+	const key = String(postId);
+	if (!key) return [];
+	const rows = await db.mediaUrls.where('postId').equals(key).toArray();
+
 	const out: MediaRef[] = [];
-	for (const m of mediaUrls) {
-		const match = await cache.match(m.url);
-		if (match) {
-			const sizeStr = match.headers.get('content-length');
-			const size = sizeStr ? parseInt(sizeStr, 10) : 0;
-			out.push({ url: m.url, type: m.type, size });
-		}
+	for (const row of rows) {
+		const file = await readMediaFile(row.url);
+		if (file) out.push({ url: row.url, type: row.type, size: file.size });
 	}
 	return out;
 }
 
-export async function clearMediaForPost(postId: number): Promise<number> {
-	if (!browser || !Number.isFinite(postId)) return 0;
-	const mediaUrls = await db.mediaUrls.where('postId').equals(postId).toArray();
-	if (mediaUrls.length === 0) return 0;
-	
-	const cache = await getMediaCache();
-	if (cache) {
-		for (const m of mediaUrls) {
-			await cache.delete(m.url);
-		}
+export async function clearMediaForPost(postId: string | number): Promise<number> {
+	if (!browser) return 0;
+	const key = String(postId);
+	if (!key) return 0;
+	const rows = await db.mediaUrls.where('postId').equals(key).toArray();
+	if (rows.length === 0) return 0;
+
+	for (const row of rows) {
+		await deleteMediaFile(row.url);
+		dropCachedUrl(row.url);
 	}
-	await db.mediaUrls.bulkDelete(mediaUrls.map(m => m.url));
-	return mediaUrls.length;
+	await db.mediaUrls.bulkDelete(rows.map((row) => row.url));
+	return rows.length;
 }
 
-export async function gcOrphanBlobs(validPostIds: ReadonlySet<number>): Promise<{ deletedBlobs: number; deletedIndex: number }> {
+export async function gcOrphanBlobs(validPostIds: ReadonlySet<string>): Promise<{ deletedBlobs: number; deletedIndex: number }> {
 	if (!browser) return { deletedBlobs: 0, deletedIndex: 0 };
-	
+
 	const orphans: string[] = [];
-	await db.mediaUrls.each((m) => {
-		if (!validPostIds.has(m.postId)) orphans.push(m.url);
+	await db.mediaUrls.each((row) => {
+		// postId '0' marks media migrated from Cache Storage whose post could not
+		// be identified; keep it until LRU eviction rather than deleting blind.
+		if (row.postId === '0') return;
+		if (!validPostIds.has(row.postId)) orphans.push(row.url);
 	});
-	
+
 	let deletedBlobs = 0;
-	const cache = await getMediaCache();
-	if (cache) {
-		for (const url of orphans) {
-			if (await cache.delete(url)) deletedBlobs++;
-			dropCachedUrl(url);
-		}
+	for (const url of orphans) {
+		if (await deleteMediaFile(url)) deletedBlobs++;
+		dropCachedUrl(url);
 	}
-	
+
 	await db.mediaUrls.bulkDelete(orphans);
 	return { deletedBlobs, deletedIndex: orphans.length };
 }
 
 export async function getMediaCacheStats(): Promise<{ count: number; estimatedMb: number }> {
 	if (!browser) return { count: 0, estimatedMb: 0 };
-	
-	const cache = await getMediaCache();
-	if (!cache) return { count: 0, estimatedMb: 0 };
-	
-	const keys = await cache.keys();
-	let estimatedMb = 0;
-	if (navigator.storage && navigator.storage.estimate) {
-		const est = await navigator.storage.estimate();
-		estimatedMb = Math.round(((est.usage || 0) / 1024 / 1024) * 10) / 10;
-	}
-	
-	return { count: keys.length, estimatedMb };
+
+	const files = await listMediaFiles();
+	const bytes = files.reduce((sum, file) => sum + file.size, 0);
+	return {
+		count: files.length,
+		estimatedMb: Math.round((bytes / 1024 / 1024) * 10) / 10
+	};
 }
 
 export { clearMediaCache } from './clear';

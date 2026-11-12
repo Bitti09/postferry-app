@@ -1,18 +1,18 @@
 <script lang="ts">
 	import NPFText from './NPFText.svelte';
-	let { blocks = [], attribution = null } = $props<{ blocks: any[]; attribution?: any }>();
+	let { blocks = [], attribution = null }: { blocks: any[]; attribution?: any } = $props();
 
 	let askerName = $derived(attribution?.blog?.name || 'Anonymous');
 	let askerAvatar = $derived(
 		attribution?.blog?.name 
-			? `https://api.tumblr.com/v2/blog/${attribution.blog.name}/avatar/64`
+			? `/api/avatar?blog=${encodeURIComponent(attribution.blog.name)}&size=64`
 			: 'https://assets.tumblr.com/images/default_avatar/cube_closed_64.png'
 	);
 </script>
 
 <div class="flex gap-4 my-6 bg-gray-900 border border-gray-800 p-5 rounded-2xl relative">
 	<!-- Avatar -->
-	<div class="flex-shrink-0">
+	<div class="shrink-0">
 		<div class="w-12 h-12 rounded-xl overflow-hidden ring-2 ring-gray-800">
 			<img src={askerAvatar} alt={askerName} class="w-full h-full object-cover" />
 		</div>

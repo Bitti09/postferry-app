@@ -3,4 +3,3 @@ export * from './posts';
 export * from './meta';
 export * from './clear';
 export * as db from './newDb';
-export { wipeLegacy } from './wipeLegacy';

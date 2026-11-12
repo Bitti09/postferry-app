@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { db } from '$lib/cache/newDb';
+	import { db } from '#lib/cache/newDb';
 	
 	let out = $state("loading...");
 	onMount(async () => {

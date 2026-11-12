@@ -1,4 +1,4 @@
-import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, LinkBlock, MediaExtraction, MediaVariant } from '$lib/types';
+import type { TumblrPost, MediaItem, NpfContentBlock, ImageBlock, VideoBlock, AudioBlock, LinkBlock, MediaExtraction, MediaVariant } from '#lib/types';
 
 function toMediaArray(media?: MediaItem[] | MediaItem | null): MediaItem[] {
 	if (!media) return [];
@@ -113,6 +113,10 @@ function isVideoBlock(block: NpfContentBlock): block is VideoBlock {
 }
 
 /** Type guard for link blocks (have url) */
+function isAudioBlock(block: NpfContentBlock): block is AudioBlock {
+	return block.type === 'audio';
+}
+
 function isLinkBlock(block: NpfContentBlock): block is LinkBlock {
 	return block.type === 'link';
 }
@@ -122,6 +126,7 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 	const urls = new Set<string>();
 	const videos = new Set<string>();
 	const images = new Set<string>();
+	const audio = new Set<string>();
 	const posters = new Set<string>();
 	const filmstrips = new Set<string>();
 	const variants = new Map<string, MediaVariant[]>();
@@ -164,6 +169,18 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 				if (posterBest) variants.set(posterUrl, allVariants(block.poster));
 			}
 			if (!primary) primary = posterUrl ?? vidUrl ?? '';
+		} else if (isAudioBlock(block)) {
+			const best = pickBestMedia(block.media);
+			// Audio stays out of `urls`: slideshow/grid treat that list as
+			// renderable image/video media. `getAllMediaUrls` includes audio.
+			if (best && isCacheableMediaUrl(best.url)) audio.add(best.url);
+			const posterBest = pickBestMedia(block.poster);
+			if (posterBest && isCacheableMediaUrl(posterBest.url)) {
+				urls.add(posterBest.url);
+				posters.add(posterBest.url);
+				variants.set(posterBest.url, allVariants(block.poster));
+			}
+			if (!primary) primary = posterBest?.url ?? '';
 		} else if (isLinkBlock(block)) {
 			const posterBest = pickBestMedia(block.poster);
 			if (posterBest && isCacheableMediaUrl(posterBest.url)) {
@@ -189,6 +206,7 @@ function extractFromBlocks(blocks: NpfContentBlock[]): MediaExtraction {
 		urls: [...urls],
 		videos: [...videos],
 		images: [...images],
+		audio: [...audio],
 		posters: [...posters],
 		filmstrips: [...filmstrips],
 		primary,
@@ -258,6 +276,7 @@ function extractLegacyUrls(post: TumblrPost): MediaExtraction {
 		urls: [...urls],
 		images: [...images],
 		videos: [...videos],
+		audio: [],
 		posters: [...posters],
 		filmstrips: [...filmstrips],
 		primary,
@@ -286,6 +305,7 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 			urls: [...new Set([...result.urls, ...trailResult.urls])],
 			videos: [...new Set([...result.videos, ...trailResult.videos])],
 			images: [...new Set([...result.images, ...trailResult.images])],
+			audio: [...new Set([...result.audio, ...trailResult.audio])],
 			posters: [...new Set([...result.posters, ...trailResult.posters])],
 			filmstrips: [...new Set([...result.filmstrips, ...trailResult.filmstrips])],
 			primary: result.primary || trailResult.primary,
@@ -311,6 +331,7 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 		urls: result.urls.filter(Boolean),
 		videos: result.videos.filter(Boolean),
 		images: result.images.filter(Boolean),
+		audio: result.audio.filter(Boolean),
 		posters: result.posters.filter(Boolean),
 		filmstrips: result.filmstrips.filter(Boolean),
 		primary: preferredPrimary,
@@ -321,9 +342,10 @@ export function extractMedia(post: TumblrPost): MediaExtraction {
 	return cleaned;
 }
 
-/** Get all media URLs (images + videos + posters) from a post. */
+/** Get all media URLs (images + videos + audio + posters) from a post. */
 export function getAllMediaUrls(post: TumblrPost): string[] {
-	return extractMedia(post).urls;
+	const extraction = extractMedia(post);
+	return [...new Set([...extraction.urls, ...extraction.audio])];
 }
 
 /** Get the primary/featured media URL for a post. */

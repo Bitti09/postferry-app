@@ -1,6 +1,6 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 import { db } from './newDb';
-import type { TumblrAccount, TumblrUser, TumblrBlog } from '$lib/types';
+import type { TumblrAccount, TumblrUser, TumblrBlog } from '#lib/types';
 import type { CachedAccountInfo, CachedBlogInfo, CachedFollowedList } from './newDb';
 
 export async function getMeta<T>(key: string): Promise<T | undefined> {
@@ -75,8 +75,9 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 		}
 
 		await new Promise((r) => setTimeout(r, Math.random() * 400));
-		const fullBlogName = blogName.includes('.') ? blogName : `${blogName}.tumblr.com`;
-		const response = await fetch(`https://api.tumblr.com/v2/blog/${fullBlogName}/avatar/${size}`);
+		// Avatars go through the app's same-origin proxy, which uses the
+		// postferry client; the browser never calls Tumblr directly.
+		const response = await fetch(`/api/avatar?blog=${encodeURIComponent(blogName)}&size=${size}`);
 		if (response.status === 429) {
 			console.warn(`[Rate Limit] Avatar fetch for ${blogName} hit 429. Using fallback.`);
 			if (best) {
@@ -191,9 +192,13 @@ export async function saveFollowedBlogsForAccount(
 	blogs: TumblrBlog[]
 ): Promise<void> {
 	if (!browser) return;
+	// Callers may hand us a Svelte $state proxy array or proxied blog objects
+	// (the following page keeps `followedBlogs` in $state and passes it back
+	// verbatim); IDB structured clone rejects proxies (DataCloneError).
+	// Round-trip to plain data first, same defense as setAccountInfo above.
 	await db.followedBlogs.put({
 		accountBlogName,
-		blogs,
+		blogs: JSON.parse(JSON.stringify(blogs)),
 		cachedAt: Date.now()
 	});
 }

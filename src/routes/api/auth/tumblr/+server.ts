@@ -1,51 +1,39 @@
-import { checkRateLimit } from '$lib/server/rateLimiter';
-import { oauth, rememberTokenSecret } from '$lib/server/oauth';
+import { oauthClient, rememberTokenSecret } from '#lib/server/oauth';
 import { redirect } from '@sveltejs/kit';
+import { TUMBLR_CALLBACK_URL } from '$app/env/private';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url, cookies }) => {
-	const callbackUrl = `${url.origin}/api/auth/callback`;
+/**
+ * Tumblr rejects any `oauth_callback` that is not registered verbatim on the
+ * app, so the callback must never be inferred from the incoming request
+ * (`http` behind a TLS-terminating tunnel, a `localhost` port, or a rotated
+ * tunnel host all produce a URL Tumblr refuses).
+ *
+ * `TUMBLR_CALLBACK_URL` is the registered value and wins whenever it is set.
+ * The header-based fallback only exists for local setups without that env var.
+ */
+function resolveCallbackUrl(url: URL, request: Request): string {
+	if (TUMBLR_CALLBACK_URL) return TUMBLR_CALLBACK_URL;
 
-	const requestData = {
-		url: 'https://www.tumblr.com/oauth/request_token',
-		method: 'POST',
-		data: { oauth_callback: callbackUrl }
-	};
+	const proto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+	const host = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+	return `${proto || url.protocol.replace(':', '')}://${host || url.host}/api/auth/callback`;
+}
 
-	const authHeader = oauth.toHeader(oauth.authorize(requestData));
+export const GET: RequestHandler = async ({ url, request, cookies }) => {
+	const callbackUrl = resolveCallbackUrl(url, request);
 
-	await checkRateLimit();
-		const response = await fetch(requestData.url, {
-		method: requestData.method,
-		headers: {
-			...authHeader,
-			'Content-Type': 'application/x-www-form-urlencoded'
-		}
-	});
+	const requestToken = await oauthClient.requestToken(callbackUrl);
+	rememberTokenSecret(requestToken.token, requestToken.tokenSecret);
 
-	if (!response.ok) {
-		const text = await response.text();
-		return new Response(`Error fetching request token: ${text}`, { status: response.status });
-	}
-
-	const text = await response.text();
-	const params = new URLSearchParams(text);
-	const oauth_token = params.get('oauth_token');
-	const oauth_token_secret = params.get('oauth_token_secret');
-
-	if (!oauth_token || !oauth_token_secret) {
-		return new Response('Invalid response from Tumblr', { status: 500 });
-	}
-
-	// Store secret in the capped pending-secrets store
-	rememberTokenSecret(oauth_token, oauth_token_secret);
-	// Also store in cookie as a fallback/secondary mechanism
-	cookies.set('oauth_token_secret', oauth_token_secret, {
+	// Cookie fallback for a second mechanism / restart between redirects.
+	cookies.set('oauth_token_secret', requestToken.tokenSecret, {
 		path: '/',
 		httpOnly: true,
+		sameSite: 'lax',
 		secure: url.protocol === 'https:',
-		maxAge: 60 * 10 // 10 minutes
+		maxAge: 60 * 10
 	});
 
-	throw redirect(302, `https://www.tumblr.com/oauth/authorize?oauth_token=${oauth_token}`);
+	throw redirect(302, oauthClient.authorizeUrl(requestToken.token), { external: true });
 };

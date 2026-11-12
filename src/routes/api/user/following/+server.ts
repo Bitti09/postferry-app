@@ -1,9 +1,6 @@
-import { forAccounts, readAccounts } from '$lib/server/clients';
+import { forAccounts, readAccounts } from '#lib/server/clients';
+import type { TumblrBlog } from 'postferry';
 import type { RequestHandler } from './$types';
-
-interface FollowedBlog {
-	name: string;
-}
 
 /** Multi-account followed-blogs fetch. Per-account offset cursors. */
 export const POST: RequestHandler = async ({ request }) => {
@@ -12,43 +9,38 @@ export const POST: RequestHandler = async ({ request }) => {
 		return new Response('Invalid accounts payload', { status: 400 });
 	}
 	const { accounts } = body;
-	const offsets = body.offsets as Record<string, number> | undefined;
+	const offsets = (body.offsets ?? {}) as Record<string, number>;
+
 	const results = await forAccounts(accounts, async (client, account) => {
-		const params: Record<string, unknown> = { limit: 20 };
-		const accountOffset = offsets?.[account.blogName];
-		if (accountOffset) {
-			params.offset = accountOffset.toString();
-		}
-		const data = await client.userFollowing(params);
-		const blogs = (data.blogs ?? []) as FollowedBlog[];
+		const accountOffset = offsets[account.blogName];
+		const data = await client.userFollowing({
+			limit: 20,
+			...(accountOffset ? { offset: accountOffset } : {})
+		});
+		const blogs = (data.blogs ?? []) as TumblrBlog[];
 		return {
 			blogs,
 			newOffset: blogs.length > 0 ? (accountOffset ?? 0) + blogs.length : accountOffset
 		};
 	});
 
-	const allBlogs = results.flatMap((r) => (r.ok ? r.value!.blogs : []));
-
-	const uniqueBlogsMap = new Map<string, FollowedBlog>();
-	for (const blog of allBlogs) {
-		uniqueBlogsMap.set(blog.name, blog);
+	const uniqueBlogs = new Map<string, TumblrBlog>();
+	for (const result of results) {
+		if (!result.ok || !result.value) continue;
+		for (const blog of result.value.blogs) uniqueBlogs.set(blog.name, blog);
 	}
-	const sortedBlogs = Array.from(uniqueBlogsMap.values()).sort(
-		(a, b) => a.name.localeCompare(b.name)
-	);
+	const blogs = [...uniqueBlogs.values()].sort((a, b) => a.name.localeCompare(b.name));
 
 	const newOffsets: Record<string, number> = {};
-	for (const r of results) {
-		if (r.ok && r.value?.newOffset !== undefined) {
-			newOffsets[r.accountBlogName] = r.value.newOffset;
+	for (const result of results) {
+		if (result.ok && result.value?.newOffset !== undefined) {
+			newOffsets[result.accountBlogName] = result.value.newOffset;
 		}
 	}
 
-	return new Response(JSON.stringify({
-		blogs: sortedBlogs,
+	return Response.json({
+		blogs,
 		newOffsets,
 		accountResponses: results
-	}), {
-		headers: { 'Content-Type': 'application/json' }
 	});
 };

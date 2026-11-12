@@ -1,7 +1,8 @@
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 import { db } from './newDb';
-import { gcOrphanBlobs, getMediaCache } from './blobs';
-import { activeDownloads } from '$lib/stores/downloads';
+import { gcOrphanBlobs } from './blobs';
+import { deleteMediaFile } from '#lib/mediaFiles';
+import { activeDownloads } from '#lib/stores/downloads';
 import { dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 
 // Bounded offline cache: without this, 10+ accounts with thousands of
@@ -57,12 +58,7 @@ export async function gcOrphanMedia(): Promise<{ deletedBlobs: number; deletedIn
  * service worker is about to write.
  */
 export async function enforceMediaCacheLimit(): Promise<number> {
-	const cache = await getMediaCache();
-	if (!cache) return 0;
-
-	let count = 0;
-	const keys = (cache.keys() as unknown as Promise<ReadableStream<Request>>);
-	for await (const _ of await keys) count++;
+	const count = await db.mediaUrls.count();
 
 	let usage = 0;
 	try {
@@ -97,7 +93,7 @@ export async function enforceMediaCacheLimit(): Promise<number> {
 	for (let i = 0; i < toDelete.length; i += DELETE_CHUNK) {
 		const chunk = toDelete.slice(i, i + DELETE_CHUNK);
 		for (const url of chunk) {
-			if (await cache.delete(url)) deleted++;
+			if (await deleteMediaFile(url)) deleted++;
 			dropCachedUrl(url);
 		}
 		await db.mediaUrls.bulkDelete(chunk);

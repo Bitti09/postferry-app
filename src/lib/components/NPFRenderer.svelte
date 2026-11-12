@@ -11,14 +11,19 @@
 		layout = [],
 		useGrid = false,
 		fillHeight = false,
-	} = $props<{
+	}: {
 		content: any[];
 		layout?: any[];
 		useGrid?: boolean;
 		fillHeight?: boolean;
-	}>();
+	} = $props();
 
 	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
+	/** NPF media is a single object for video/audio and an array for images. */
+	function firstMedia(value: any): any | null {
+		if (!value) return null;
+		return Array.isArray(value) ? value[0] ?? null : value;
+	}
 	const proxied = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? toProxyUrl(u) : u);
 
 	let lightboxUrl = $state<string | null>(null);
@@ -144,26 +149,27 @@
 		{:else if block.type === "row"}
 			<div class="flex flex-row flex-wrap gap-2 my-6">
 				{#each block.blocks as subblock}
-					{@const imgUrl = subblock.type === 'image' ? (subblock.media?.[0]?.url || subblock.url) : null}
+					{@const imgUrl = subblock.type === 'image' ? (firstMedia(subblock.media)?.url || subblock.url) : null}
 					<div class="min-w-0 flex-1">
 						{#if subblock.type === "image"}
 							{#if imgUrl}
 								<button
 									type="button"
 									class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
-									style="max-height: 40vh;"
+									style="max-height: 40dvh;"
 									onclick={() => openLightbox(imgUrl)}
 								>
 									<CachedMedia
 										url={imgUrl}
 										alt="Post content"
 										class="select-none block object-contain w-full h-full"
-										style="max-height: 40vh;"
+										style="max-height: 40dvh;"
 									/>
 									{#if subblock.attribution}
 										<a
 											href={subblock.attribution.url}
 											target="_blank"
+											rel="noopener noreferrer"
 											class="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur text-white text-[10px] font-bold uppercase rounded hover:bg-primary transition-colors opacity-0 group-hover:opacity-100"
 											onclick={(e) => e.stopPropagation()}
 										>
@@ -236,19 +242,20 @@
 					<button
 						type="button"
 						class="select-none rounded-2xl overflow-hidden relative group flex items-center justify-center mx-auto transition-transform duration-300 hover:scale-[1.02] cursor-zoom-in"
-						style="max-height: 60vh; width: 100%; aspect-ratio: auto;"
+						style="max-height: 60dvh; width: 100%; aspect-ratio: auto;"
 						onclick={() => openLightbox(imgUrl)}
 					>
 						<CachedMedia
 							url={imgUrl}
 							alt="Post content"
 							class="select-none block object-contain w-full h-full"
-							style="max-height: 60vh;"
+							style="max-height: 60dvh;"
 						/>
 					{#if block.attribution}
 						<a
 							href={block.attribution.url}
 							target="_blank"
+							rel="noopener noreferrer"
 							class="absolute top-4 left-4 px-3 py-1.5 bg-black/70 backdrop-blur-md text-white text-xs font-black uppercase rounded-lg hover:bg-primary transition-all opacity-0 group-hover:opacity-100 shadow-lg"
 							onclick={(e) => e.stopPropagation()}
 						>
@@ -272,12 +279,12 @@
 			{@const originalVid = mediaArray.find((m: any) => m.has_original_dimensions)}
 			{@const vidUrl = originalVid ? originalVid.url : (mediaArray[0]?.url || block.url)}
 			{#if vidUrl}
-				<div class="rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video my-8 relative group border border-gray-800 max-h-[75vh]">
-					{#if block.media?.[0]?.type?.startsWith("video/") || vidUrl.includes(".mp4") || vidUrl.includes(".webm") || !block.provider || block.provider === 'tumblr'}
+				<div class="rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video my-8 relative group border border-gray-800 max-h-[75dvh]">
+					{#if firstMedia(block.media)?.type?.startsWith("video/") || vidUrl.includes(".mp4") || vidUrl.includes(".webm") || !block.provider || block.provider === 'tumblr'}
 						<CachedMedia
 							url={vidUrl}
-							type={block.media?.[0]?.type || "video/mp4"}
-							posterUrl={block.poster?.[0]?.url || block.thumbnail_url || ""}
+							type={firstMedia(block.media)?.type || "video/mp4"}
+							posterUrl={firstMedia(block.poster)?.url || block.thumbnail_url || ""}
 							class="w-full h-full object-contain"
 						/>
 					{:else}
@@ -287,11 +294,11 @@
 							href={fallbackHref}
 							target="_blank"
 							rel="noopener noreferrer"
-							class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gradient-to-br from-gray-900 to-black hover:from-gray-800 hover:to-gray-900 transition-colors group/link"
+							class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-linear-to-br from-gray-900 to-black hover:from-gray-800 hover:to-gray-900 transition-colors group/link"
 						>
-							{#if block.poster?.[0]?.url || block.thumbnail_url}
+							{#if firstMedia(block.poster)?.url || block.thumbnail_url}
 								<CachedMedia
-									url={block.poster?.[0]?.url || block.thumbnail_url}
+									url={firstMedia(block.poster)?.url || block.thumbnail_url}
 									type="image"
 									thumbnailMode={true}
 									class="absolute inset-0 w-full h-full object-cover opacity-30 group-hover/link:opacity-40 transition-opacity"
@@ -327,11 +334,12 @@
 			<a
 				href={block.url}
 				target="_blank"
+				rel="noopener noreferrer"
 				class="block p-6 bg-gray-900 rounded-2xl border border-gray-800 hover:border-primary transition-all group my-6 shadow-xl"
 			>
-				{#if block.poster && block.poster[0]}
+				{#if firstMedia(block.poster)}
 					<CachedMedia
-						url={block.poster[0].url}
+						url={firstMedia(block.poster).url}
 						alt=""
 						class="w-full h-64 object-cover rounded-xl mb-4 shadow-lg"
 					/>
@@ -353,7 +361,7 @@
 			</a>
 		{:else if block.type === "audio"}
 			<div class="p-6 bg-gray-900 rounded-3xl my-6 flex flex-wrap items-center gap-6 border border-gray-800 shadow-2xl relative group overflow-hidden">
-				<div class="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+				<div class="absolute inset-0 bg-linear-to-r from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
 				<div class="p-5 bg-primary/20 rounded-2xl text-primary shadow-inner relative z-10">
 					<PlayCircle size={40} />
 				</div>
@@ -368,8 +376,8 @@
 					{/if}
 				</div>
 				<div class="w-full sm:w-auto relative z-10">
-					{#if block.media?.[0]?.url}
-						<audio controls src={block.media[0].url} class="w-full h-10"></audio>
+					{#if firstMedia(block.media)?.url}
+						<audio controls src={firstMedia(block.media).url} class="w-full h-10"></audio>
 					{/if}
 				</div>
 				
@@ -406,7 +414,7 @@
 		<img
 			src={proxied(lightboxUrl)}
 			alt="Fullscreen"
-			class="w-screen h-screen object-contain select-none"
+			class="w-dvw h-dvh object-contain select-none"
 			onclick={(e) => e.stopPropagation()}
 		/>
 		<button

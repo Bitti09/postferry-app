@@ -1,24 +1,25 @@
 <script lang="ts">
 	import { PlayCircle, Download, CheckCircle2, Loader2, Image as ImageIcon } from '@lucide/svelte';
-	import { extractMedia, variantForDisplay, getVideoUrls } from '$lib/mediaUrls';
-	import { downloadHighestRes } from '$lib/download';
-	import { settings } from '$lib/stores/settings';
-	import { requestMediaDownload, cancelQueuedDownload } from '$lib/stores/downloads';
+	import { goto } from '$app/navigation';
+	import { extractMedia, variantForDisplay, getVideoUrls } from '#lib/mediaUrls';
+	import { downloadHighestRes } from '#lib/download';
+	import { settings } from '#lib/stores/settings';
+	import { requestMediaDownload, cancelQueuedDownload } from '#lib/stores/downloads';
 	import { cachedMediaUrls } from '../mediaCacheStatus.svelte.ts';
 	import CachedMedia from './CachedMedia.svelte';
-	import type { TumblrPost } from '$lib/types';
+	import { postId, type TumblrPost } from '#lib/types';
 
 	let {
 		post,
 		mode = 'normal',
 		onMediaClick,
 		autoCacheEnabled = true
-	} = $props<{
+	}: {
 		post: TumblrPost;
 		mode?: 'normal' | 'cache';
 		onMediaClick?: (post: TumblrPost, mediaUrl?: string) => void;
 		autoCacheEnabled?: boolean;
-	}>();
+	} = $props();
 
 	let mediaInfo = $derived.by(() => {
 		const extraction = extractMedia(post);
@@ -64,7 +65,7 @@
 	let mediaFailed = $state(false);
 
 	$effect(() => {
-		post.id;
+		postId(post);
 		mediaFailed = false;
 	});
 
@@ -73,7 +74,7 @@
 	const DETAIL_ZONE_HEIGHT_PX = 132;
 
 	function openPostDetail() {
-		window.location.href = postDetailHref;
+		void goto(postDetailHref);
 	}
 
 	function handleMediaClick(e: MouseEvent) {
@@ -103,7 +104,7 @@
 		if (isCached) return;
 
 		const postMeta = {
-			postId: post.id,
+			postId: postId(post),
 			blogName: post.blog_name,
 			timestamp: post.timestamp,
 			post
@@ -139,7 +140,7 @@
 		if (pending.length === 0) return;
 
 		const postMeta = {
-			postId: post.id,
+			postId: postId(post),
 			blogName: post.blog_name,
 			timestamp: post.timestamp,
 			post
@@ -287,7 +288,7 @@
 				if (mode === 'cache') return;
 				e.preventDefault();
 				e.stopPropagation();
-				window.location.href = `/blog/${post.blog_name}`;
+				void goto(`/blog/${post.blog_name}`);
 			}}
 		>
 			{post.blog_name}

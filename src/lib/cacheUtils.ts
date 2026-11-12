@@ -3,13 +3,13 @@
 // when the user clicks "Cache Visible". Streams post → URL mapping through
 // `bulkIsMediaCached` for the existence check, then `requestMediaDownload`
 // per URL. Concurrency is bounded by the download queue in
-// `$lib/stores/downloads` (CONCURRENCY in-flight fetches, FIFO for the rest).
+// `#lib/stores/downloads` (CONCURRENCY in-flight fetches, FIFO for the rest).
 
-import { bulkIsMediaCached, type SlimMediaMeta } from '$lib/cache/blobs';
-import { requestMediaDownload } from '$lib/stores/downloads';
-import { scheduleMediaMaintenance } from '$lib/cache/eviction';
-import { getAllMediaUrls } from '$lib/mediaUrls';
-import type { TumblrPost } from '$lib/types';
+import { bulkIsMediaCached, type SlimMediaMeta } from '#lib/cache/blobs';
+import { requestMediaDownload } from '#lib/stores/downloads';
+import { scheduleMediaMaintenance } from '#lib/cache/eviction';
+import { getAllMediaUrls } from '#lib/mediaUrls';
+import { postId, type TumblrPost } from '#lib/types';
 
 export interface CacheProgress { done: number; total: number }
 
@@ -35,12 +35,12 @@ export async function cacheAllVisible(
 		// is written to IDB when the download completes.
 		const plainPost: TumblrPost = JSON.parse(JSON.stringify(post));
 		const meta: SlimMediaMeta = {
-			postId: plainPost.id,
+			postId: postId(plainPost),
 			blogName: plainPost.blog_name,
 			timestamp: plainPost.timestamp,
 			post: plainPost,
 			postMeta: {
-				id: plainPost.id,
+				id: postId(plainPost),
 				blogName: plainPost.blog_name,
 				timestamp: plainPost.timestamp,
 				summary: plainPost.summary ?? '',

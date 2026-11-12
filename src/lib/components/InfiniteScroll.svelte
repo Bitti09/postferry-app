@@ -1,7 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
-
-	let { hasMore = true, loading = false, onload } = $props<{ hasMore?: boolean, loading?: boolean, onload?: () => void }>();
+	let { hasMore = true, loading = false, onload }: { hasMore?: boolean, loading?: boolean, onload?: () => void } = $props();
 
 	let observer: IntersectionObserver;
 	let element: HTMLElement;

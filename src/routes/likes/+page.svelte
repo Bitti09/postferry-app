@@ -1,376 +1,161 @@
 <script lang="ts">
-	import { onMount, untrack } from "svelte";
-	import { browser } from "$app/environment";
-	import { accounts } from "$lib/stores/accounts";
-	import { settings } from "$lib/stores/settings";
-	import { cacheAllVisible } from "$lib/cacheUtils";
-	import { filterPosts, type PostFilter } from "$lib/postFilter";
-	import { bulkSetPosts } from '$lib/cache';
-	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
-	import type { TumblrPost, TumblrAccount } from '$lib/types';
-	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
-	import PostCard from "$lib/components/PostCard.svelte";
-	import Slideshow from "$lib/components/Slideshow.svelte";
+	import { snapshot } from '$app/navigation';
+	import { onMount, onDestroy, untrack } from 'svelte';
+	import { browser } from '$app/env';
+	import { accounts } from '#lib/stores/accounts';
+	import { settings } from '#lib/stores/settings';
+	import { cacheAllVisible } from '#lib/cacheUtils';
+	import { filterPosts, type PostFilter } from '#lib/postFilter';
+	import { bulkSetPosts } from '#lib/cache';
+	import { refreshUnreferencedPosts } from '#lib/stores/unreferencedPosts';
+	import { createPagedFeed } from '#lib/feed/pagedFeed.svelte';
+	import { combineFeedPosts } from 'postferry';
+	import { postId, type TumblrPost, type TumblrAccount } from '#lib/types';
+	import InfiniteScroll from '#lib/components/InfiniteScroll.svelte';
+	import PostGrid from '#lib/components/PostGrid.svelte';
+	import Slideshow from '#lib/components/Slideshow.svelte';
 	import {
 		Heart,
 		User,
 		Download,
 		Loader2,
 		Play,
-		Home,
-		Search,
 		Layers, Image as ImageIcon, Video, Music, Quote, Link as LinkIcon, MessageSquare, HelpCircle, FileText
-	} from "@lucide/svelte";
-
-	let likes: TumblrPost[] = $state([]);
-	let loading = $state(false);
-	let hasMore = $state(true);
-	let accountOffsets: Record<string, number> = $state({});
-	let error = $state("");
-	let isOffline = $state(false);
-	let slideshowActive = $state(false);
-	let activeSlideshowPostId = $state<string | number | null>(null);
-	let slideshowStartPostId = $state<string | number | null>(null);
-	let slideshowStartMediaUrl = $state<string | null>(null);
-	let likesScrollContainer = $state<HTMLElement | null>(null);
-	let gridContainer = $state<HTMLElement | null>(null);
-
-	const GRID_GAP_PX = 16;
-	const VIRTUAL_OVERSCAN_ROWS = 8;
-
-	let containerWidth = $state(0);
-	let viewportHeight = $state(0);
-	let scrollTop = $state(0);
-
-	function getAutoColumnCount(width: number): number {
-		if (width >= 1536) return 7;
-		if (width >= 1280) return 6;
-		if (width >= 1024) return 5;
-		if (width >= 768) return 4;
-		if (width >= 640) return 3;
-		if (width >= 480) return 2;
-		return 1;
-	}
-
-	let columnCount = $derived.by(() => {
-		const configured = $settings.mediaColumns;
-		if (configured !== 'auto') {
-			const parsed = Number.parseInt(configured, 10);
-			if (Number.isFinite(parsed) && parsed > 0) return parsed;
-		}
-		const width = containerWidth || (browser ? window.innerWidth : 1024);
-		return getAutoColumnCount(width);
-	});
-
-	let currentFilter = $state<PostFilter>("all");
-	let filteredLikes = $derived(filterPosts(likes, currentFilter));
-
-	let rowCount = $derived(Math.ceil(filteredLikes.length / columnCount));
-	let cardWidth = $derived.by(() => {
-		if (columnCount <= 0 || containerWidth <= 0) return 0;
-		return Math.max(0, (containerWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
-	});
-	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
-	let rowStride = $derived(rowHeight + GRID_GAP_PX);
-	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
-
-	let visibleStartRow = $derived.by(() => {
-		if (rowStride <= 0) return 0;
-		return Math.max(0, Math.floor(scrollTop / rowStride) - VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleEndRow = $derived.by(() => {
-		if (rowStride <= 0) return -1;
-		const viewportBottom = scrollTop + viewportHeight;
-		return Math.min(rowCount - 1, Math.ceil(viewportBottom / rowStride) + VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleRows = $derived.by(() => {
-		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
-			return [] as { row: number; posts: TumblrPost[] }[];
-		}
-
-		const rows: { row: number; posts: TumblrPost[] }[] = [];
-		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
-			const startIndex = row * columnCount;
-			const postsInRow = filteredLikes.slice(startIndex, startIndex + columnCount);
-			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
-		}
-		return rows;
-	});
-
-	function updateContainerMetrics() {
-		if (!likesScrollContainer) return;
-		containerWidth = likesScrollContainer.clientWidth;
-		viewportHeight = likesScrollContainer.clientHeight;
-		scrollTop = likesScrollContainer.scrollTop;
-	}
-
-	$effect(() => {
-		if (!slideshowActive && activeSlideshowPostId) {
-			const el = document.getElementById(`post-${activeSlideshowPostId}`);
-			if (el) {
-				el.scrollIntoView({ behavior: 'instant', block: 'center' });
-			} else if (likesScrollContainer && rowStride > 0) {
-				const postIndex = filteredLikes.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
-				if (postIndex >= 0) {
-					const row = Math.floor(postIndex / columnCount);
-					likesScrollContainer.scrollTo({ top: Math.max(0, row * rowStride - 120), behavior: 'instant' });
-				}
-			}
-			activeSlideshowPostId = null;
-		}
-	});
-	
-	let fetchController: AbortController | null = null;
+	} from '@lucide/svelte';
 
 	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
-		{ value: "all", label: "All", icon: Layers },
-		{ value: "photo", label: "Photos", icon: ImageIcon },
-		{ value: "video", label: "Videos", icon: Video },
-		{ value: "audio", label: "Audio", icon: Music },
-		{ value: "quote", label: "Quotes", icon: Quote },
-		{ value: "link", label: "Links", icon: LinkIcon },
-		{ value: "chat", label: "Chat", icon: MessageSquare },
-		{ value: "answer", label: "Asks", icon: HelpCircle },
-		{ value: "text", label: "Text", icon: FileText }
+		{ value: 'all', label: 'All', icon: Layers },
+		{ value: 'photo', label: 'Photos', icon: ImageIcon },
+		{ value: 'video', label: 'Videos', icon: Video },
+		{ value: 'audio', label: 'Audio', icon: Music },
+		{ value: 'quote', label: 'Quotes', icon: Quote },
+		{ value: 'link', label: 'Links', icon: LinkIcon },
+		{ value: 'chat', label: 'Chat', icon: MessageSquare },
+		{ value: 'answer', label: 'Asks', icon: HelpCircle },
+		{ value: 'text', label: 'Text', icon: FileText }
 	];
+
+	let currentFilter = $state<PostFilter>('all');
+	let error = $state('');
+	let isOffline = $state(false);
+	let slideshowActive = $state(false);
+	let activeSlideshowPostId = $state<string | null>(null);
+	let slideshowStartPostId = $state<string | null>(null);
+	let slideshowStartMediaUrl = $state<string | null>(null);
+	let likesScrollContainer = $state<HTMLElement | null>(null);
+	let downloadingAll = $state(false);
+	let downloadProgress = $state({ done: 0, total: 0 });
 
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((a) => a.active));
 
-	let initialMount = $state(true);
-	let prevAccountsStr = $state("");
+	const feed = createPagedFeed<TumblrPost>({
+		idOf: postId,
+		merge: combineFeedPosts,
+		loadPage: async ({ cursors, topUp, signal }) => {
+			if (activeAccounts.length === 0) return { items: [] };
+			if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Offline');
 
-	export const snapshot = {
-		capture: () => ({
-			likes,
-			accountOffsets,
-			hasMore,
-			currentFilter,
-			prevAccountsStr,
-		}),
+			const response = await fetch('/api/user/likes', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				signal,
+				body: JSON.stringify({ accounts: activeAccounts, before: topUp ? undefined : cursors.before })
+			});
+			if (!response.ok) throw new Error(`Failed to load likes (${response.status})`);
+
+			const data = await response.json();
+			const items = (data.liked_posts ?? []) as TumblrPost[];
+			if (items.length > 0) {
+				void bulkSetPosts(items).then(() => refreshUnreferencedPosts());
+			}
+			return {
+				items,
+				cursors: topUp ? undefined : data.newBefore,
+				accountResponses: data.accountResponses
+			};
+		}
+	});
+
+	let filteredLikes = $derived(filterPosts(feed.items, currentFilter));
+	let loading = $derived(feed.loading);
+
+	let lastKey = '';
+	let restoredFromSnapshot = false;
+
+	function accountKey(): string {
+		return activeAccounts.map((account) => account.blogName).sort().join(',');
+	}
+
+	$effect(() => {
+		const key = accountKey();
+		if (!browser) return;
+		untrack(() => {
+			if (restoredFromSnapshot) {
+				restoredFromSnapshot = false;
+				lastKey = key;
+				return;
+			}
+			if (key === lastKey) return;
+			lastKey = key;
+			void feed.reset();
+		});
+	});
+
+	snapshot({
+		capture: () => ({ feed: feed.snapshot(), filter: currentFilter }),
 		restore: (value: any) => {
-			likes = value.likes || [];
-			accountOffsets = value.accountOffsets || {};
-			hasMore = value.hasMore ?? true;
-			currentFilter = value.currentFilter || "all";
-			prevAccountsStr = value.prevAccountsStr || "";
-		},
-	};
-	let downloadingAll = $state(false);
-	let downloadProgress = $state({ done: 0, total: 0 });
-	let consecutiveAutoFetches = 0;
+			if (value?.filter) currentFilter = value.filter;
+			feed.restore(value?.feed ?? value);
+			restoredFromSnapshot = true;
+			lastKey = accountKey();
+		}
+	});
 
 	async function startCacheAll() {
 		if (downloadingAll) return;
 		downloadingAll = true;
-		await cacheAllVisible(filteredLikes, (p) => { downloadProgress = p; });
+		await cacheAllVisible(filteredLikes, (progress) => {
+			downloadProgress = progress;
+		});
 		downloadingAll = false;
 	}
 
 	function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
-		slideshowStartPostId = post?.id ?? null;
+		slideshowStartPostId = postId(post);
 		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
-	async function loadLikes(reset = false) {
-		if (activeAccounts.length === 0) {
-			likes = [];
-			loading = false;
-			return;
-		}
-		if (isOffline) {
-			loading = false;
-			return;
-		}
-		if (loading) {
-			if (reset && fetchController) {
-				fetchController.abort();
-			} else {
-				return;
-			}
-		}
-
-		fetchController = new AbortController();
-		loading = true;
-		error = "";
-
-		if (reset) {
-			accountOffsets = {};
-			likes = [];
-			hasMore = true;
-		}
-
-		try {
-			const res = await fetch("/api/user/likes", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				signal: fetchController.signal,
-				body: JSON.stringify({
-					accounts: activeAccounts,
-					before: accountOffsets,
-				}),
-			});
-
-			if (!res.ok) throw new Error("Failed to load likes");
-
-			const data = await res.json();
-			const newLikes: TumblrPost[] = data.liked_posts;
-			const newBefore = data.newBefore;
-
-			if (!newLikes || newLikes.length === 0) {
-				hasMore = false;
-			} else {
-				const existingIds = new Set(likes.map((p) => p.id));
-				const uniqueNew = newLikes.filter(
-					(p) => !existingIds.has(p.id),
-				);
-
-				if (uniqueNew.length === 0 && newLikes.length > 0) {
-					// All duplicates, but we might have more pages
-				} else if (uniqueNew.length === 0) {
-				} else {
-					likes = [...likes, ...uniqueNew];
-					accountOffsets = { ...accountOffsets, ...newBefore };
-					
-					const likeUpdates: Record<string, Record<string, boolean>> =
-						data.likeUpdates ?? {};
-					
-					void bulkSetPosts(uniqueNew, {
-						likedBy: likeUpdates
-					}).then(() => refreshUnreferencedPosts());
-				}
-			}
-		} catch (err: any) {
-			if (err.name === 'AbortError') return;
-			error = err.message;
-		} finally {
-			if (fetchController && !fetchController.signal.aborted) {
-				loading = false;
-			}
-		}
-	}
-
-	// Auto-fetch to ensure the last row is perfectly filled
 	$effect(() => {
-		if ($settings.mediaColumns !== "auto" && !loading && hasMore && filteredLikes.length > 0) {
-			const cols = parseInt($settings.mediaColumns);
-			if (filteredLikes.length % cols !== 0) {
-				if (consecutiveAutoFetches < 2) {
-					consecutiveAutoFetches++;
-					loadLikes();
-				}
-			} else {
-				consecutiveAutoFetches = 0;
-			}
+		if (!slideshowActive && activeSlideshowPostId) {
+			const element = document.getElementById(`post-${activeSlideshowPostId}`);
+			element?.scrollIntoView({ behavior: 'instant', block: 'center' });
+			activeSlideshowPostId = null;
 		}
 	});
 
-	// Abort any in-flight fetch immediately when the filter changes
-	$effect(() => {
-		const _filter = currentFilter; // track
-		untrack(() => {
-			if (fetchController && !fetchController.signal.aborted) {
-				fetchController.abort();
-				loading = false;
-			}
-			consecutiveAutoFetches = 0;
-		});
+	onMount(() => {
+		isOffline = !navigator.onLine;
+		const onOnline = () => {
+			isOffline = false;
+			void feed.refresh();
+		};
+		const onOffline = () => {
+			isOffline = true;
+		};
+		window.addEventListener('online', onOnline);
+		window.addEventListener('offline', onOffline);
+		return () => {
+			window.removeEventListener('online', onOnline);
+			window.removeEventListener('offline', onOffline);
+		};
 	});
 
-	// Reactive reload only when active accounts change
-	$effect(() => {
-		const currentAccountsStr = activeAccounts
-			.map((a) => a.blogName)
-			.sort()
-			.join(",");
-
-		untrack(() => {
-			if (browser) {
-				if (initialMount) {
-					initialMount = false;
-					if (
-						likes.length > 0 &&
-						currentAccountsStr === prevAccountsStr
-					) {
-						return; // Skip reload on initial mount if snapshot was restored and matches
-					}
-				}
-
-				prevAccountsStr = currentAccountsStr;
-
-				if (activeAccounts.length > 0) {
-					loadLikes(true);
-				} else {
-					// Clear results
-					likes = [];
-					loading = false;
-					hasMore = false;
-					accountOffsets = {};
-				}
-			}
-		});
-	});
+	onDestroy(() => feed.destroy());
 
 	function toggleAccount(blogName: string) {
 		accounts.toggleActive(blogName);
 	}
-
-	onMount(() => {
-		if (browser) {
-			isOffline = !navigator.onLine;
-			const onOnline = () => {
-				isOffline = false;
-				loadLikes();
-			};
-			const onOffline = () => (isOffline = true);
-			const onWindowResize = () => updateContainerMetrics();
-			const onContainerScroll = () => {
-				if (!likesScrollContainer) return;
-				scrollTop = likesScrollContainer.scrollTop;
-			};
-
-			window.addEventListener("online", onOnline);
-			window.addEventListener("offline", onOffline);
-			window.addEventListener("resize", onWindowResize);
-
-			if (likesScrollContainer) {
-				likesScrollContainer.addEventListener('scroll', onContainerScroll, { passive: true });
-			}
-
-			const resizeObserver = new ResizeObserver(() => {
-				updateContainerMetrics();
-			});
-			if (likesScrollContainer) {
-				resizeObserver.observe(likesScrollContainer);
-			}
-
-			requestAnimationFrame(() => {
-				updateContainerMetrics();
-			});
-
-			return () => {
-				window.removeEventListener("online", onOnline);
-				window.removeEventListener("offline", onOffline);
-				window.removeEventListener("resize", onWindowResize);
-				if (likesScrollContainer) {
-					likesScrollContainer.removeEventListener('scroll', onContainerScroll);
-				}
-				resizeObserver.disconnect();
-			};
-		}
-	});
-
-	$effect(() => {
-		likesScrollContainer;
-		filteredLikes.length;
-		columnCount;
-		if (!browser) return;
-		requestAnimationFrame(() => {
-			updateContainerMetrics();
-		});
-	});
 </script>
 
 <div class="h-[calc(100dvh-5rem)] flex flex-col p-4 md:p-8 bg-black overflow-hidden">
@@ -397,13 +182,9 @@
 		</div>
 	{/if}
 
-	<header
-		class="mb-8 shrink-0 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-	>
+	<header class="mb-8 shrink-0 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
-			<h1
-				class="text-3xl font-bold text-white tracking-tight flex items-center gap-3"
-			>
+			<h1 class="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
 				<Heart size={32} class="text-pink-500" />
 				Your Favourites
 			</h1>
@@ -418,13 +199,10 @@
 					<div
 						role="button"
 						tabindex="0"
-						class="badge badge-lg gap-2 cursor-pointer transition-colors {account.active
-							? 'badge-primary'
-							: 'badge-ghost'}"
+						class="badge badge-lg gap-2 cursor-pointer transition-colors {account.active ? 'badge-primary' : 'badge-ghost'}"
 						onclick={() => toggleAccount(account.blogName)}
 						onkeydown={(e) => {
-							if (e.key === "Enter" || e.key === " ")
-								toggleAccount(account.blogName);
+							if (e.key === 'Enter' || e.key === ' ') toggleAccount(account.blogName);
 						}}
 					>
 						<User size={14} />
@@ -486,15 +264,20 @@
 		</div>
 	</header>
 
+	{#if feed.partialErrors.length > 0 && !isOffline}
+		<div class="alert alert-warning mb-6">
+			<span>
+				{feed.partialErrors.length} of {activeAccounts.length} account{feed.partialErrors.length === 1 ? '' : 's'} failed:
+				{feed.partialErrors.map((account) => account.accountBlogName).join(', ')}
+			</span>
+		</div>
+	{/if}
+
 	{#if downloadingAll}
-		<div
-			class="mb-6 bg-gray-900 rounded-full h-2 overflow-hidden border border-gray-800"
-		>
+		<div class="mb-6 bg-gray-900 rounded-full h-2 overflow-hidden border border-gray-800">
 			<div
 				class="h-full bg-primary transition-all duration-300 rounded-full"
-				style="width: {downloadProgress.total > 0
-					? (downloadProgress.done / downloadProgress.total) * 100
-					: 0}%"
+				style="width: {downloadProgress.total > 0 ? (downloadProgress.done / downloadProgress.total) * 100 : 0}%"
 			></div>
 		</div>
 	{/if}
@@ -504,40 +287,29 @@
 			Please activate an account to view your favourites.
 		</div>
 	{:else}
-		{#if error && !isOffline}
-			<div class="alert alert-error mb-6">{error}</div>
+		{#if feed.error && !isOffline}
+			<div class="alert alert-error mb-6">{feed.error}</div>
 		{/if}
 
-		{#if filteredLikes.length === 0 && !loading && likes.length > 0}
+		{#if filteredLikes.length === 0 && !loading && feed.items.length > 0}
 			<div class="py-20 flex-1 flex items-center justify-center text-gray-500">
 				No favourited posts match the current filter.
 			</div>
+		{:else if feed.items.length === 0 && loading}
+			<div class="flex-1 flex items-center justify-center">
+				<span class="loading loading-spinner loading-lg text-primary"></span>
+			</div>
 		{:else}
 			<div bind:this={likesScrollContainer} class="flex-1 overflow-y-auto pr-2 pb-20">
-				<main>
-					<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
-						{#if cardWidth > 0}
-							{#each visibleRows as rowItem (rowItem.row)}
-								<div
-									class="absolute"
-									style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
-								>
-									<div
-										class="grid"
-										style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
-									>
-										{#each rowItem.posts as post (post.id)}
-											<div id={"post-" + post.id} class="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]">
-												<PostCard {post} onMediaClick={openSlideshowFromPost} />
-											</div>
-										{/each}
-									</div>
-								</div>
-							{/each}
-						{/if}
-					</div>
-				</main>
-				<InfiniteScroll {hasMore} {loading} onload={loadLikes} />
+				<PostGrid
+					posts={filteredLikes}
+					columnSetting={$settings.mediaColumns}
+					onMediaClick={openSlideshowFromPost}
+					scroll="container"
+					scrollElement={likesScrollContainer}
+					cardClass="shadow-lg rounded-lg overflow-hidden transition-transform hover:scale-[1.02]"
+				/>
+				<InfiniteScroll hasMore={feed.hasMore} {loading} onload={feed.loadMore} />
 			</div>
 		{/if}
 	{/if}
@@ -549,7 +321,5 @@
 	startPostId={slideshowStartPostId}
 	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredLikes}
-	onReachEnd={async () => {
-		await loadLikes();
-	}}
+	onReachEnd={async () => { await feed.loadMore(); }}
 />

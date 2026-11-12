@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { X, ChevronLeft, ChevronRight, Loader2, Maximize2, Minimize2 } from '@lucide/svelte';
-	import { extractMedia as extractPostMedia } from '$lib/mediaUrls';
+	import { extractMedia as extractPostMedia } from '#lib/mediaUrls';
 	import { onDestroy as svelteOnDestroy } from 'svelte';
 	import CachedMedia from './CachedMedia.svelte';
-	import { upscaleImage } from '$lib/upscaleImage';
+	import { upscaleImage } from '#lib/upscaleImage';
+	import { postId } from '#lib/types';
 
 	const toProxyUrl = (u: string) => `/api/media/proxy?url=${encodeURIComponent(u)}`;
 
@@ -29,14 +30,14 @@
 		activePostId = $bindable<string | number | null>(null),
 		startPostId = null,
 		startMediaUrl = null
-	} = $props<{
+	}: {
 		active?: boolean,
 		posts: any[],
 		onReachEnd?: () => Promise<void>,
 		activePostId?: string | number | null,
 		startPostId?: string | number | null,
 		startMediaUrl?: string | null
-	}>();
+	} = $props();
 
 	type FlatMedia = {
 		url: string;
@@ -51,7 +52,7 @@
 	let postCount = $state(0);
 	let previousPostIds: string[] = [];
 	$effect(() => {
-		const nextPostIds: string[] = posts.map((post: any) => String(post?.id ?? ''));
+		const nextPostIds: string[] = posts.map((post: any) => postId(post));
 		const unchangedPrefix =
 			previousPostIds.length <= nextPostIds.length &&
 			previousPostIds.every((id: string, index: number) => nextPostIds[index] === id);
@@ -90,7 +91,12 @@
 			const isVideo =
 				videoUrls.has(url) ||
 				/\.(mp4|webm|m3u8)(\?|$)/i.test(url) ||
-				(post.content && post.content.some((b: any) => b.type === 'video' && (b.url === url || b.media?.some((m: any) => m?.url === url))));
+				(post.content && post.content.some((b: any) => {
+					if (b.type !== 'video') return false;
+					if (b.url === url) return true;
+					const mediaList = Array.isArray(b.media) ? b.media : b.media ? [b.media] : [];
+					return mediaList.some((m: any) => m?.url === url);
+				}));
 			return {
 				url,
 				isVideo,
@@ -145,7 +151,7 @@
 
 	$effect(() => {
 		if (active && currentItem && currentItem.post) {
-			activePostId = currentItem.post.id;
+			activePostId = postId(currentItem.post);
 		}
 	});
 
@@ -181,7 +187,7 @@
 		let targetIndex = -1;
 		if (startMediaUrl && startPostId != null) {
 			targetIndex = flatMedia.findIndex(
-				(item) => String(item.post?.id) === String(startPostId) && item.url === startMediaUrl
+				(item) => postId(item.post) === String(startPostId) && item.url === startMediaUrl
 			);
 		}
 		if (targetIndex < 0 && startMediaUrl) {
@@ -189,7 +195,7 @@
 			if (idx >= 0) targetIndex = idx;
 		}
 		if (targetIndex < 0 && startPostId != null) {
-			targetIndex = flatMedia.findIndex((item) => String(item.post?.id) === String(startPostId));
+			targetIndex = flatMedia.findIndex((item) => postId(item.post) === String(startPostId));
 		}
 		if (targetIndex >= 0) {
 			currentIndex = targetIndex;

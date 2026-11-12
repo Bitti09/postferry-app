@@ -1,4 +1,4 @@
-import { forAccounts, readAccounts } from '$lib/server/clients';
+import { forAccounts, readAccounts } from '#lib/server/clients';
 import type { RequestHandler } from './$types';
 
 /**
@@ -13,16 +13,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 	const { accounts } = body;
 
-	const results = await forAccounts(accounts, (client) => client.userInfo() as Promise<any>);
+	const results = await forAccounts(accounts, (client) => client.userInfo());
 
-	return new Response(JSON.stringify({
-		results: results.map((r) => ({
-			accountBlogName: r.accountBlogName,
-			ok: r.ok,
-			user: r.ok ? (r.value as { user?: unknown })?.user : undefined,
-			error: r.ok ? undefined : r.error
+	return Response.json({
+		results: results.map((result) => ({
+			accountBlogName: result.accountBlogName,
+			ok: result.ok,
+			user: result.ok ? result.value?.user : undefined,
+			error: result.ok ? undefined : result.error
 		}))
-	}), {
-		headers: { 'Content-Type': 'application/json' }
 	});
 };

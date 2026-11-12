@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { dev } from "$app/environment";
-	import { page } from "$app/stores";
-	import { accounts, accountsReady } from "$lib/stores/accounts";
-	import NPFRenderer from "$lib/components/NPFRenderer.svelte";
-	import AvatarImage from "$lib/components/AvatarImage.svelte";
+	import { dev } from "$app/env";
+	import { page } from "$app/state";
+	import { accounts, accountsReady } from "#lib/stores/accounts";
+	import NPFRenderer from "#lib/components/NPFRenderer.svelte";
+	import AvatarImage from "#lib/components/AvatarImage.svelte";
 	import { ArrowLeft, User, Heart, MessageSquare, Repeat2, Clock, Grid, Image as ImageIcon, Heart as HeartIcon, Check, Loader2, Repeat2 as RepeatIcon, ListFilter, Quote, Maximize, Minimize, WifiOff } from "@lucide/svelte";
-	import { bulkSetPosts, getCachedPostById, mergeNotes } from '$lib/cache/posts';
-	import { getMediaForPost, type MediaRef } from '$lib/cache/blobs';
-	import InfiniteScroll from "$lib/components/InfiniteScroll.svelte";
+	import { bulkSetPosts, getCachedPostById, mergeNotes } from '#lib/cache/posts';
+	import { getMediaForPost, type MediaRef } from '#lib/cache/blobs';
+	import InfiniteScroll from "#lib/components/InfiniteScroll.svelte";
+	import LegacyPostContent from "#lib/components/LegacyPostContent.svelte";
+	import { noteKey } from '#lib/notes';
+	import { isNpfPost } from 'postferry';
 
 	let { data }: { data: { blogName: string; postId: string } } = $props();
 	let blogName = $derived(data.blogName);
 	let postId = $derived(data.postId);
 
-	let isOfflinePost = $derived($page.url.searchParams.get('offline') === '1');
+	let isOfflinePost = $derived(page.url.searchParams.get('offline') === '1');
 
 	let post = $state<any>(null);
 	let notes = $state<any[]>([]);
@@ -50,7 +53,7 @@
 		const runId = ++noteTotalsRun;
 		noteTotalsLoading = true;
 
-		const seen = new Set<string>(initialNotes.map((n) => `${n.blog_name}_${n.timestamp}_${n.type || ''}`));
+		const seen = new Set<string>(initialNotes.map((n) => noteKey(n)));
 		const base = summarizeNotes(initialNotes);
 		let likes = base.likes;
 		let reblogs = base.reblogs;
@@ -73,7 +76,7 @@
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
-						account,
+						accounts: [account],
 						blogName,
 						postId,
 						before_timestamp: cursor
@@ -87,7 +90,7 @@
 
 				let added = 0;
 				for (const note of batch) {
-					const key = `${note.blog_name}_${note.timestamp}_${note.type || ''}`;
+					const key = noteKey(note);
 					if (seen.has(key)) continue;
 					seen.add(key);
 					added++;
@@ -159,64 +162,51 @@
 		loading = true;
 		error = "";
 		try {
-			// Fetch the post from ALL active accounts in parallel to get per-account liked state
-			const results = await Promise.all(
-				activeAccs.map(acc =>
-					fetch(`/api/posts/detail`, {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ account: acc, blogName, postId })
-					}).then(async r => {
-						const data = await r.json();
-						if (!r.ok) throw new Error(data.error || 'Failed to fetch post details.');
-						return data;
-					})
-				)
-			);
+			// One request: the server fans out to every active account, merges
+			// per-account liked/reblogged state, and returns the post plus the
+			// first page of notes.
+			const response = await fetch('/api/posts/detail', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ accounts: activeAccs, blogName, postId })
+			});
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error || 'Failed to fetch post details.');
 
-			// Use the first result for the main post data & notes
-			const primary = results[0];
-			post = primary.post;
-			const initialNotes: any[] = primary.notes || [];
+			post = data.post;
+			const initialNotes: any[] = data.notes || [];
+			const totalNotes = Number(data.total_notes ?? post?.note_count ?? 0);
 			notes = initialNotes;
 
 			// Cache the post for offline reading. `bulkSetPosts` dedupes by id
-			// and re-stamps `cachedAt`, so calling it here is idempotent.
-			if (primary.post?.id !== undefined && primary.post?.id !== null) {
-				void bulkSetPosts([primary.post]);
+			// and preserves the first-seen cachedAt, so this is idempotent.
+			if (post?.id !== undefined && post?.id !== null) {
+				void bulkSetPosts([post]);
 			}
 
-			// Persist any notes this batch returned into the per-post notes store.
 			if (initialNotes.length > 0) {
 				void mergeNotes(postId, initialNotes);
 			}
 
-			// Detect if more notes exist (API returns ≤50 at a time)
 			if (notes.length > 0) {
-				const total = primary.post?.note_count ?? 0;
-				notesHasMore = notes.length < total;
+				notesHasMore = notes.length < totalNotes;
 				notesBeforeTimestamp = notes[notes.length - 1]?.timestamp ?? null;
 			}
 
 			noteTotals = {
 				...summarizeNotes(notes),
 				processed: notes.length,
-				complete: (primary.post?.note_count ?? 0) <= notes.length
+				complete: totalNotes <= notes.length
 			};
 
-			// Seed like/reblog state from each account's own response
+			// Per-account state comes from the merged response.
+			const states = (data.accountStates ?? {}) as Record<string, { liked?: boolean; reblogged?: boolean }>;
 			const initialLikes: Record<string, boolean> = {};
 			const initialReblogs: Record<string, boolean> = {};
-
-			results.forEach((result, i) => {
-				const acc = activeAccs[i];
-				// `liked` is per-authenticated-user — Tumblr returns this per OAuth token
-				initialLikes[acc.blogName] = result.liked === true;
-				// For reblogs, check the notes for this blog name
-				initialReblogs[acc.blogName] = (result.notes || []).some(
-					(n: any) => n.type === 'reblog' && n.blog_name === acc.blogName
-				);
-			});
+			for (const acc of activeAccs) {
+				initialLikes[acc.blogName] = states[acc.blogName]?.liked === true;
+				initialReblogs[acc.blogName] = states[acc.blogName]?.reblogged === true;
+			}
 
 			accountLikes = initialLikes;
 			rebloggedAccounts = initialReblogs;
@@ -258,8 +248,8 @@ async function loadOfflinePost() {
 	post = null;
 	notes = [];
 	try {
-		const numericPostId = Number(postId);
-		const entry = await getCachedPostById(numericPostId);
+		// Post ids are 64-bit; keep the route's string id, never Number() it.
+		const entry = await getCachedPostById(postId);
 		if (entry?.post) {
 			post = entry.post;
 			const embeddedNotes = Array.isArray(entry.notes) ? entry.notes : [];
@@ -277,7 +267,7 @@ async function loadOfflinePost() {
 			// every blob key we wrote atomically with the post, so the UI can
 			// hydrate offline with zero network calls.
 			try {
-				linkedMedia = await getMediaForPost(numericPostId);
+				linkedMedia = await getMediaForPost(postId);
 			} catch (e) {
 				console.warn('[offline] failed to load linked media metadata', e);
 				linkedMedia = [];
@@ -311,7 +301,7 @@ async function loadOfflinePost() {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					account,
+					accounts: [account],
 					postId: post.id_string || post.id,
 					reblogKey: post.reblog_key,
 					action: currentlyLiked ? "unlike" : "like",
@@ -334,7 +324,7 @@ async function loadOfflinePost() {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					account,
+					accounts: [account],
 					postId: post.id_string || post.id,
 					reblogKey: post.reblog_key
 				}),
@@ -372,7 +362,7 @@ async function loadOfflinePost() {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					account: activeAccs[0],
+					accounts: [activeAccs[0]],
 					blogName,
 					postId,
 					before_timestamp: notesBeforeTimestamp
@@ -383,8 +373,8 @@ async function loadOfflinePost() {
 			if (newNotes.length === 0) {
 				notesHasMore = false;
 			} else {
-				const existingKeys = new Set(notes.map(n => `${n.blog_name}_${n.timestamp}`));
-				const unique = newNotes.filter(n => !existingKeys.has(`${n.blog_name}_${n.timestamp}`));
+				const existingKeys = new Set(notes.map((n) => noteKey(n)));
+				const unique = newNotes.filter((n) => !existingKeys.has(noteKey(n)));
 				notes = [...notes, ...unique];
 				if (unique.length > 0) {
 					void mergeNotes(postId, unique);
@@ -458,7 +448,7 @@ async function loadOfflinePost() {
 		npfTestRaw = null;
 		try {
 			const payloadBase = {
-				account: activeAccs[0],
+				accounts: [activeAccs[0]],
 				blogName,
 				postId
 			};
@@ -516,7 +506,7 @@ async function loadOfflinePost() {
 	</style>
 </svelte:head>
 
-<div class="flex flex-col bg-black min-h-screen xl:h-[calc(100vh-64px)] xl:overflow-hidden">
+<div class="flex flex-col bg-black min-h-dvh xl:h-[calc(100dvh-64px)] xl:overflow-hidden">
 	<!-- Global Navigation -->
 	<div class="sticky top-0 z-50 bg-black/80 backdrop-blur-md border-b border-gray-800 px-4 py-3 flex items-center justify-between">
 		<button onclick={() => history.back()} class="btn btn-ghost btn-sm gap-2 text-white hover:bg-gray-800">
@@ -552,7 +542,7 @@ async function loadOfflinePost() {
 				</span>
 				{#if post}
 					<a
-						href={`/post/${post.blog_name}/${post.id}`}
+						href={`/post/${post.blog_name}/${post.id_string || post.id}`}
 						class="hidden sm:inline text-[10px] font-bold text-primary hover:underline uppercase tracking-widest"
 					>Load live</a>
 				{/if}
@@ -561,7 +551,7 @@ async function loadOfflinePost() {
 	</div>
 
 	{#if loading}
-		<div class="flex h-[80vh] items-center justify-center">
+		<div class="flex h-[80dvh] items-center justify-center">
 			<span class="loading loading-spinner loading-lg text-primary"></span>
 		</div>
 	{:else if error}
@@ -677,7 +667,7 @@ async function loadOfflinePost() {
 								<p class="font-bold text-gray-400 mb-1">Disabled in offline mode</p>
 								<p>Like and reblog require a live Tumblr session. Open the live version to interact.</p>
 								<a
-									href={`/post/${post?.blog_name}/${post?.id}`}
+									href={`/post/${post?.blog_name}/${post?.id_string || post?.id}`}
 									class="btn btn-sm btn-outline mt-3"
 								>Open live</a>
 							</div>
@@ -774,10 +764,16 @@ async function loadOfflinePost() {
 						{/each}
 					{/if}
 
-					<!-- This Post's Added Content (if any) -->
-					{#if post.content && post.content.length > 0}
+					<!-- This Post's Added Content (if any). The API still returns
+					     legacy posts (body/photos/video/player) alongside NPF, so
+					     fall back to the legacy renderer when content is absent. -->
+					{#if isNpfPost(post)}
 						<div class="{post.trail?.length > 0 ? 'mt-4' : 'pt-6'}">
 							<NPFRenderer content={post.content} {useGrid} />
+						</div>
+					{:else}
+						<div class="{post.trail?.length > 0 ? 'mt-4' : 'pt-6'}">
+							<LegacyPostContent {post} />
 						</div>
 					{/if}
 				</div>
@@ -1009,7 +1005,7 @@ async function loadOfflinePost() {
 			onclick={() => showDebug = false}
 			aria-label="Close debug modal"
 		></button>
-		<div class="relative z-10 bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl">
+		<div class="relative z-10 bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-5xl h-[80dvh] flex flex-col shadow-2xl">
 			<div class="flex items-center justify-between p-4 border-b border-gray-800">
 				<h3 class="text-lg font-bold text-white tracking-widest uppercase">API Response Debug</h3>
 				<div class="flex items-center gap-2">
@@ -1064,17 +1060,8 @@ async function loadOfflinePost() {
 {/if}
 
 <style>
-	.custom-scrollbar::-webkit-scrollbar {
-		width: 4px;
-	}
-	.custom-scrollbar::-webkit-scrollbar-track {
-		background: transparent;
-	}
-	.custom-scrollbar::-webkit-scrollbar-thumb {
-		background: #1f2937;
-		border-radius: 10px;
-	}
-	.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-		background: #374151;
+	.custom-scrollbar {
+		scrollbar-width: thin;
+		scrollbar-color: #1f2937 transparent;
 	}
 </style>

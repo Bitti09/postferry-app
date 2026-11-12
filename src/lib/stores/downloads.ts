@@ -1,10 +1,11 @@
 import { writable } from 'svelte/store';
-import { browser } from '$app/environment';
-import type { SlimMediaMeta } from '$lib/cache/blobs';
-import { db, mediaAssetBase } from '$lib/cache/newDb';
-import type { TumblrPost } from '$lib/types';
+import { browser } from '$app/env';
+import type { SlimMediaMeta } from '#lib/cache/blobs';
+import { db, mediaAssetBase } from '#lib/cache/newDb';
+import type { TumblrPost } from '#lib/types';
 import { cachedMediaUrls, dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
-import { getCachedPostById, freshEntry, putCachedPostEntry } from '$lib/cache/posts';
+import { getCachedPostById, freshEntry, putCachedPostEntry } from '#lib/cache/posts';
+import { indexStoredMedia } from '#lib/cache/blobs';
 
 /**
  * Urls currently in flight (dispatched to the SW, not merely queued).
@@ -157,11 +158,11 @@ function handleFailure(url: string, error: string): void {
 
 if (browser && navigator.serviceWorker) {
 	navigator.serviceWorker.addEventListener('message', async (event) => {
-		const data = event.data as { type?: string; url?: string; mimeType?: string; error?: string; base?: string; ext?: string; area?: number } | null;
+		const data = event.data as { type?: string; url?: string; mimeType?: string; error?: string; base?: string; ext?: string; area?: number; size?: number } | null;
 		if (!data || !data.url) return;
 
 		if (data.type === 'MEDIA_CACHED') {
-			const { url, mimeType } = data;
+			const { url, mimeType, size } = data;
 			inFlight.delete(url);
 			activeDownloads.update((set) => {
 				if (!set.has(url)) return set;
@@ -172,8 +173,10 @@ if (browser && navigator.serviceWorker) {
 			cachedMediaUrls.add(url);
 			consecutiveFailures = 0;
 
-			// Save post metadata to IndexedDB
 			const meta = downloadMeta.get(url);
+			await indexStoredMedia(url, meta?.postId ?? '0', mimeType ?? '', size ?? 0);
+
+			// Save post metadata to IndexedDB
 			if (meta) {
 				try {
 					if (meta.post) {
@@ -188,7 +191,7 @@ if (browser && navigator.serviceWorker) {
 							await putCachedPostEntry(meta.postId, freshEntry(plainPost, meta.blogName));
 						} else {
 							existing.post = plainPost;
-							existing.cachedAt = Date.now();
+							existing.updatedAt = Date.now();
 							await putCachedPostEntry(meta.postId, existing);
 						}
 					}
@@ -228,6 +231,7 @@ if (browser && navigator.serviceWorker) {
 				navigator.serviceWorker.controller?.postMessage({ type: 'DROP_MEDIA', urls: lower });
 			}
 			for (const url of lower) dropCachedUrl(String(url));
+			if (lower.length > 0) await db.mediaUrls.bulkDelete(lower);
 		}
 	});
 }

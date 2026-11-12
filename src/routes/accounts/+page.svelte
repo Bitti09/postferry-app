@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { accounts } from '$lib/stores/accounts';
+	import { accounts } from '#lib/stores/accounts';
 	import { Heart, User, RefreshCw, CheckCircle2, Circle, Download, Loader2 } from '@lucide/svelte';
-	import { bulkIsMediaCached, loadAllAccountInfos, setAccountInfo } from '$lib/cache';
-	import { bulkSetPosts } from '$lib/cache/posts';
-	import { requestMediaDownload } from '$lib/stores/downloads';
-	import { getAllMediaUrls } from '$lib/mediaUrls';
-	import type { TumblrAccount, TumblrPost, TumblrUser } from '$lib/types';
+	import { bulkIsMediaCached, loadAllAccountInfos, setAccountInfo } from '#lib/cache';
+	import { bulkSetPosts } from '#lib/cache/posts';
+	import { requestMediaDownload } from '#lib/stores/downloads';
+	import { getAllMediaUrls } from '#lib/mediaUrls';
+	import type { TumblrAccount, TumblrPost, TumblrUser } from '#lib/types';
 
 	let accountInfos = $state<Record<string, TumblrUser>>({});
 	let loading = $state(false);
@@ -69,7 +69,7 @@
 				const res = await fetch('/api/blog/likes', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ account, blogName: account.blogName, before: beforeTimestamp })
+					body: JSON.stringify({ accounts: [account], blogName: account.blogName, before: beforeTimestamp })
 				});
 
 				if (!res.ok) {
@@ -88,16 +88,16 @@
 				if (!posts || posts.length === 0) break; // Reached the end!
 
 				// Cache the raw post metadata directly into IndexedDB (supports text-only posts!)
-				const likeUpdates = Object.fromEntries(posts.map((p: any) => [p.id, { [account.blogName]: true }]));
+				const likeUpdates = Object.fromEntries(posts.map((p: any) => [String(p.id_string ?? p.id), { [account.blogName]: true }]));
 				await bulkSetPosts(posts, { likedBy: likeUpdates });
 				
-				const { refreshUnreferencedPosts } = await import('$lib/stores/unreferencedPosts');
+				const { refreshUnreferencedPosts } = await import('#lib/stores/unreferencedPosts');
 				void refreshUnreferencedPosts();
 
 			// Extract and download media for this batch
-			const urlMeta = new Map<string, { postId: number, blogName: string, timestamp: number; post: any }>();
+			const urlMeta = new Map<string, { postId: string, blogName: string, timestamp: number; post: any }>();
 			for (const post of posts) {
-				const meta = { postId: post.id, blogName: post.blog_name, timestamp: post.timestamp, post };
+				const meta = { postId: String(post.id_string ?? post.id), blogName: post.blog_name, timestamp: post.timestamp, post };
 				for (const u of getAllMediaUrls(post)) {
 					if (!urlMeta.has(u)) urlMeta.set(u, meta);
 				}
@@ -152,7 +152,7 @@
 	}
 </script>
 
-<div class="min-h-screen bg-black p-4 md:p-8">
+<div class="min-h-dvh bg-black p-4 md:p-8">
 	<div class="mx-auto w-full">
 		<header class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
 			<div>
@@ -197,7 +197,7 @@
 								<div class="avatar">
 									<div class="w-16 h-16 rounded-2xl ring-2 ring-gray-800 ring-offset-2 ring-offset-gray-900 overflow-hidden bg-gray-800">
 										{#if info}
-											<img src={`https://api.tumblr.com/v2/blog/${account.blogName}/avatar/512`} alt={account.blogName} />
+											<img src={`/api/avatar?blog=${encodeURIComponent(account.blogName)}&size=512`} alt={account.blogName} />
 										{:else}
 											<div class="flex items-center justify-center h-full w-full">
 												<User size={32} class="text-gray-700" />

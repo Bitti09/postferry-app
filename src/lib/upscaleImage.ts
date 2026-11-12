@@ -10,7 +10,7 @@
  * when already >= target.
  */
 
-import { browser } from '$app/environment';
+import { browser } from '$app/env';
 
 export interface UpscaleOptions {
 	radius?: number; // 2, 3, or 4

@@ -1,9 +1,8 @@
 import { extractMedia, bestSourceFor } from './mediaUrls';
 import { cachedMediaUrls } from './mediaCacheStatus.svelte';
-import { requestMediaDownload, type DownloadPriority } from '$lib/stores/downloads';
-import type { TumblrPost } from '$lib/types';
-
-const MEDIA_CACHE = 'tmblr-media';
+import { requestMediaDownload, type DownloadPriority } from '#lib/stores/downloads';
+import { postId, type TumblrPost } from '#lib/types';
+import { readMediaFile } from '#lib/mediaFiles';
 
 const extFromTypeOrUrl = (mimeType: string, url: string): string => {
 	const fromType = mimeType.split('/')[1]?.split(';')[0];
@@ -54,10 +53,8 @@ function waitForCached(url: string, timeoutMs = 120_000): Promise<boolean> {
 
 /** Read a cached blob for url, or null when absent. */
 async function readCachedBlob(url: string): Promise<Blob | null> {
-	if (!('caches' in window)) return null;
-	const cache = await caches.open(MEDIA_CACHE);
-	const hit = await cache.match(url);
-	return hit ? hit.blob() : null;
+	const file = await readMediaFile(url);
+	return file ?? null;
 }
 
 /**
@@ -97,7 +94,7 @@ export async function downloadHighestRes(
 	if (!cachedMediaUrls.has(best.url)) {
 		requestMediaDownload(
 			best.url,
-			{ postId: post.id, blogName: post.blog_name, timestamp: post.timestamp, post },
+			{ postId: postId(post), blogName: post.blog_name, timestamp: post.timestamp, post },
 			'download' satisfies DownloadPriority
 		);
 		const ok = await waitForCached(best.url);
@@ -106,7 +103,7 @@ export async function downloadHighestRes(
 
 	const blob = (await readCachedBlob(best.url)) ?? (await (await fetch(best.url)).blob());
 	const ext = extFromTypeOrUrl(blob.type, best.url);
-	const filename = `${sanitize(post.blog_name)}_${post.id}${ext ? `.${ext}` : ''}`;
+	const filename = `${sanitize(post.blog_name)}_${postId(post)}${ext ? `.${ext}` : ''}`;
 	saveBlob(blob, filename);
 }
 

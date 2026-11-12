@@ -1,18 +1,18 @@
 <script lang="ts">
-	import { settings } from "$lib/stores/settings";
-	import { getCachedAvatar } from '$lib/cache';
+	import { settings } from "#lib/stores/settings";
+	import { getCachedAvatar } from '#lib/cache';
 
-	let { blogName, size = 64, class: className = '' } = $props<{
+	let { blogName, size = 64, class: className = '' }: {
 		blogName: string;
 		size?: number;
 		class?: string;
-	}>();
+	} = $props();
 
 	let avatarUrl = $state('');
 
 	$effect(() => {
 		if (!blogName) return;
-		avatarUrl = `https://api.tumblr.com/v2/blog/${blogName}/avatar/${size}`;
+		avatarUrl = `/api/avatar?blog=${encodeURIComponent(blogName)}&size=${size}`;
 		
 		// Fast path: if autoCacheMedia is off, use direct URL (HTTP cache handles it)
 		if (!$settings.autoCacheMedia) return;

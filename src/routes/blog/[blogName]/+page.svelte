@@ -1,335 +1,193 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { page } from '$app/stores';
-	import { onMount, untrack } from 'svelte';
-	import { accounts } from '$lib/stores/accounts';
-	import PostCard from '$lib/components/PostCard.svelte';
-	import InfiniteScroll from '$lib/components/InfiniteScroll.svelte';
-	import Slideshow from '$lib/components/Slideshow.svelte';
-	import { ArrowLeft, Heart, Play } from '@lucide/svelte';
-	import { settings } from '$lib/stores/settings';
-	import { getCachedBlogInfo, setCachedBlogInfo, bulkSetPosts } from '$lib/cache';
-	import { refreshUnreferencedPosts } from '$lib/stores/unreferencedPosts';
+	import { browser } from '$app/env';
+	import { page } from '$app/state';
+	import { onMount, onDestroy, untrack } from 'svelte';
+	import { accounts } from '#lib/stores/accounts';
+	import PostGrid from '#lib/components/PostGrid.svelte';
+	import InfiniteScroll from '#lib/components/InfiniteScroll.svelte';
+	import Slideshow from '#lib/components/Slideshow.svelte';
+	import { ArrowLeft, Heart, Play, Layers, Image as ImageIcon, Video, Music, Quote, Link as LinkIcon, MessageSquare, HelpCircle, FileText } from '@lucide/svelte';
+	import { settings } from '#lib/stores/settings';
+	import { getCachedBlogInfo, setCachedBlogInfo, bulkSetPosts } from '#lib/cache';
+	import { refreshUnreferencedPosts } from '#lib/stores/unreferencedPosts';
+	import { filterPosts, type PostFilter } from '#lib/postFilter';
+	import { createPagedFeed } from '#lib/feed/pagedFeed.svelte';
+	import { combineFeedPosts } from 'postferry';
+	import { postId, type TumblrPost, type TumblrAccount } from '#lib/types';
 
+	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
+		{ value: 'all', label: 'All', icon: Layers },
+		{ value: 'photo', label: 'Photos', icon: ImageIcon },
+		{ value: 'video', label: 'Videos', icon: Video },
+		{ value: 'audio', label: 'Audio', icon: Music },
+		{ value: 'quote', label: 'Quotes', icon: Quote },
+		{ value: 'link', label: 'Links', icon: LinkIcon },
+		{ value: 'chat', label: 'Chat', icon: MessageSquare },
+		{ value: 'answer', label: 'Asks', icon: HelpCircle },
+		{ value: 'text', label: 'Text', icon: FileText }
+	];
 
-	let blogName: string = $page.params.blogName ?? '';
-
-	let info: any = $state(null);
-	let posts: any[] = $state([]);
+	let blogName = $derived(page.params.blogName ?? '');
+	let info = $state<any>(null);
 	let loadingInfo = $state(true);
-	let loadingPosts = $state(false);
-	let hasMore = $state(true);
-	let beforeId: number | null = $state(null);
+	let currentFilter = $state<PostFilter>('all');
 	let error = $state('');
 	let isOffline = $state(false);
-	let fetchController: AbortController | null = null;
-	let gridContainer = $state<HTMLElement | null>(null);
 	let slideshowActive = $state(false);
-	let activeSlideshowPostId = $state<string | number | null>(null);
-	let slideshowStartPostId = $state<string | number | null>(null);
+	let activeSlideshowPostId = $state<string | null>(null);
+	let slideshowStartPostId = $state<string | null>(null);
 	let slideshowStartMediaUrl = $state<string | null>(null);
 
-	const GRID_GAP_PX = 16;
-	const VIRTUAL_OVERSCAN_ROWS = 8;
+	let activeAccount = $derived<TumblrAccount | undefined>($accounts.find((account) => account.active));
 
-	let viewportWidth = $state(0);
-	let viewportHeight = $state(0);
-	let scrollY = $state(0);
-	let gridTop = $state(0);
-	let gridWidth = $state(0);
+	const feed = createPagedFeed<TumblrPost>({
+		idOf: postId,
+		merge: combineFeedPosts,
+		loadPage: async ({ cursors, topUp, signal }) => {
+			if (!activeAccount) return { items: [] };
+			if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Offline');
 
-	function getAutoColumnCount(width: number): number {
-		if (width >= 1536) return 7;
-		if (width >= 1280) return 6;
-		if (width >= 1024) return 5;
-		if (width >= 768) return 4;
-		if (width >= 640) return 3;
-		if (width >= 480) return 2;
-		return 1;
-	}
-	
-	let currentFilter = $state('all');
+			const response = await fetch('/api/blog/posts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				signal,
+				body: JSON.stringify({
+					accounts: [activeAccount],
+					blogName,
+					// The posts endpoint paginates by publish timestamp (`before`),
+					// not by post id.
+					before: topUp ? undefined : cursors.before
+				})
+			});
+			if (!response.ok) throw new Error(`Failed to load posts (${response.status})`);
 
-	$effect(() => {
-		const _filter = currentFilter; // track
-		untrack(() => {
-			if (fetchController && !fetchController.signal.aborted) {
-				fetchController.abort();
-				loadingPosts = false;
+			const data = await response.json();
+			const items = (data.posts ?? []) as TumblrPost[];
+			if (items.length > 0) {
+				void bulkSetPosts(items).then(() => refreshUnreferencedPosts());
 			}
+			return {
+				items,
+				cursors: topUp || data.newBefore === undefined ? undefined : { before: data.newBefore },
+				accountResponses: data.accountResponses
+			};
+		}
+	});
+
+	let filteredPosts = $derived(filterPosts(feed.items, currentFilter));
+	let loading = $derived(feed.loading);
+
+	let lastKey = '';
+	$effect(() => {
+		const key = `${blogName}|${activeAccount?.blogName ?? ''}`;
+		if (!browser) return;
+		untrack(() => {
+			if (key === lastKey) return;
+			lastKey = key;
+			void feed.reset();
 		});
 	});
 
-	let activeAccount = $derived($accounts.find((a) => a.active));
+	async function loadInfo() {
+		if (!blogName) return;
+		loadingInfo = true;
 
-	let filteredPosts = $derived(posts.filter(post => {
-		if (currentFilter === 'all') return true;
-		if (currentFilter === 'photo') return post.type === 'photo';
-		if (currentFilter === 'video') return post.type === 'video';
-		if (currentFilter === 'text') return post.type === 'text';
-		return true;
-	}));
+		const cached = await getCachedBlogInfo(blogName);
+		if (cached?.full) info = cached.full;
 
-	let columnCount = $derived.by(() => {
-		const configured = $settings.mediaColumns;
-		if (configured !== 'auto') {
-			const parsed = Number.parseInt(configured, 10);
-			if (Number.isFinite(parsed) && parsed > 0) return parsed;
+		if (typeof navigator !== 'undefined' && !navigator.onLine) {
+			loadingInfo = false;
+			return;
 		}
-		const width = viewportWidth || (browser ? window.innerWidth : 1024);
-		return getAutoColumnCount(width);
-	});
-
-	let rowCount = $derived(Math.ceil(filteredPosts.length / columnCount));
-	let cardWidth = $derived.by(() => {
-		if (columnCount <= 0 || gridWidth <= 0) return 0;
-		return Math.max(0, (gridWidth - GRID_GAP_PX * (columnCount - 1)) / columnCount);
-	});
-	let rowHeight = $derived(cardWidth > 0 ? cardWidth * (4 / 3) : 0);
-	let rowStride = $derived(rowHeight + GRID_GAP_PX);
-	let virtualHeight = $derived(rowCount > 0 ? rowCount * rowStride - GRID_GAP_PX : 0);
-
-	let viewportTopWithinGrid = $derived(Math.max(0, scrollY - gridTop));
-	let viewportBottomWithinGrid = $derived(viewportTopWithinGrid + viewportHeight);
-
-	let visibleStartRow = $derived.by(() => {
-		if (rowStride <= 0) return 0;
-		return Math.max(0, Math.floor(viewportTopWithinGrid / rowStride) - VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleEndRow = $derived.by(() => {
-		if (rowStride <= 0) return -1;
-		return Math.min(rowCount - 1, Math.ceil(viewportBottomWithinGrid / rowStride) + VIRTUAL_OVERSCAN_ROWS);
-	});
-
-	let visibleRows = $derived.by(() => {
-		if (visibleEndRow < visibleStartRow || columnCount <= 0) {
-			return [] as { row: number; posts: any[] }[];
+		if (!activeAccount) {
+			loadingInfo = false;
+			return;
 		}
 
-		const rows: { row: number; posts: any[] }[] = [];
-		for (let row = visibleStartRow; row <= visibleEndRow; row++) {
-			const startIndex = row * columnCount;
-			const postsInRow = filteredPosts.slice(startIndex, startIndex + columnCount);
-			if (postsInRow.length > 0) rows.push({ row, posts: postsInRow });
+		try {
+			const response = await fetch('/api/blog/info', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ accounts: [activeAccount], blogName })
+			});
+			if (response.ok) {
+				const data = await response.json();
+				info = data.info;
+				if (info) {
+					await setCachedBlogInfo(blogName, {
+						blogName,
+						share_likes: info.share_likes ?? false,
+						likes: info.likes,
+						updated: info.updated,
+						full: info,
+						cachedAt: Date.now()
+					});
+				}
+			}
+		} catch (caught) {
+			console.error(caught);
+		} finally {
+			loadingInfo = false;
 		}
-		return rows;
-	});
+	}
 
-	function updateViewportMetrics() {
+	$effect(() => {
 		if (!browser) return;
-		viewportWidth = window.innerWidth;
-		viewportHeight = window.innerHeight;
-		scrollY = window.scrollY;
-	}
+		const name = blogName;
+		const account = activeAccount;
+		if (!name) return;
+		if (!account) {
+			loadingInfo = false;
+			return;
+		}
+		untrack(() => void loadInfo());
+	});
 
-	function updateGridMetrics() {
-		if (!browser || !gridContainer) return;
-		const rect = gridContainer.getBoundingClientRect();
-		gridTop = window.scrollY + rect.top;
-		gridWidth = rect.width;
-	}
-
-	function refreshVirtualMetrics() {
-		updateViewportMetrics();
-		updateGridMetrics();
-	}
-
-	function openSlideshowFromPost(post: any, mediaUrl?: string) {
-		slideshowStartPostId = post?.id ?? null;
+	function openSlideshowFromPost(post: TumblrPost, mediaUrl?: string) {
+		slideshowStartPostId = postId(post);
 		slideshowStartMediaUrl = mediaUrl ?? null;
 		slideshowActive = true;
 	}
 
 	$effect(() => {
 		if (!slideshowActive && activeSlideshowPostId) {
-			const el = document.getElementById(`post-${activeSlideshowPostId}`);
-			if (el) {
-				el.scrollIntoView({ behavior: 'instant', block: 'center' });
-			} else if (browser && rowStride > 0) {
-				const postIndex = filteredPosts.findIndex((post) => String(post.id) === String(activeSlideshowPostId));
-				if (postIndex >= 0) {
-					const row = Math.floor(postIndex / columnCount);
-					const targetTop = Math.max(0, gridTop + row * rowStride - 120);
-					window.scrollTo({ top: targetTop, behavior: 'instant' });
-				}
-			}
+			const element = document.getElementById(`post-${activeSlideshowPostId}`);
+			element?.scrollIntoView({ behavior: 'instant', block: 'center' });
 			activeSlideshowPostId = null;
 		}
 	});
 
 	onMount(() => {
-		const cleanups: Array<() => void> = [];
-
-		if (browser) {
-			isOffline = !navigator.onLine;
-			const onOnline = () => { isOffline = false; };
-			const onOffline = () => { isOffline = true; };
-			window.addEventListener('online', onOnline);
-			window.addEventListener('offline', onOffline);
-			cleanups.push(() => {
-				window.removeEventListener('online', onOnline);
-				window.removeEventListener('offline', onOffline);
-			});
-		}
-
-		void (async () => {
-		// Accounts load async from IndexedDB; wait for them before proceeding
-		if ($accounts.length === 0) {
-			// Wait briefly for accounts to load from IndexedDB, retry up to 2s
-			let attempts = 0;
-			while ($accounts.length === 0 && attempts < 20) {
-				await new Promise(r => setTimeout(r, 100));
-				attempts++;
-			}
-		}
-
-		if (!activeAccount) {
-			error = 'No active account. Please activate an account to view details.';
-			loadingInfo = false;
-			return;
-		}
-
-		// IndexedDB-cached blog info for offline support
-		const cached = await getCachedBlogInfo(blogName);
-		if (cached?.full) info = cached.full;
-
-		if (typeof navigator !== 'undefined' && !navigator.onLine) {
-			loadingInfo = false;
-			loadPosts();
-			return; // Skip fetch
-		}
-
-		// Fetch Info
-		try {
-			const resInfo = await fetch('/api/blog/info', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ account: activeAccount, blogName })
-			});
-			if (resInfo.ok) {
-				const data = await resInfo.json();
-				info = data.info;
-				await setCachedBlogInfo(blogName, {
-					blogName,
-					share_likes: info?.share_likes ?? false,
-					likes: info?.likes,
-					updated: info?.updated,
-					full: info,
-					cachedAt: Date.now()
-				});
-			}
-		} catch (e) {
-			console.error(e);
-		} finally {
-			loadingInfo = false;
-		}
-
-		// Initial load of posts
-		loadPosts();
-
-		if (browser) {
-			const onResize = () => refreshVirtualMetrics();
-			const onScroll = () => {
-				scrollY = window.scrollY;
-			};
-
-			window.addEventListener('resize', onResize);
-			window.addEventListener('scroll', onScroll, { passive: true });
-
-			const resizeObserver = new ResizeObserver(() => {
-				updateGridMetrics();
-			});
-			if (gridContainer) {
-				resizeObserver.observe(gridContainer);
-			}
-
-			requestAnimationFrame(() => {
-				refreshVirtualMetrics();
-			});
-
-			const resizeCleanup = () => {
-				window.removeEventListener('resize', onResize);
-				window.removeEventListener('scroll', onScroll);
-				resizeObserver.disconnect();
-			};
-			cleanups.push(resizeCleanup);
-		}
-		})();
-
+		isOffline = !navigator.onLine;
+		const onOnline = () => {
+			isOffline = false;
+			void feed.refresh();
+		};
+		const onOffline = () => {
+			isOffline = true;
+		};
+		window.addEventListener('online', onOnline);
+		window.addEventListener('offline', onOffline);
 		return () => {
-			for (const fn of cleanups) fn();
+			window.removeEventListener('online', onOnline);
+			window.removeEventListener('offline', onOffline);
 		};
 	});
 
-	$effect(() => {
-		gridContainer;
-		filteredPosts.length;
-		columnCount;
-		if (!browser) return;
-		requestAnimationFrame(() => {
-			updateGridMetrics();
-		});
-	});
-
-	async function loadPosts() {
-		if (!activeAccount || loadingPosts || !hasMore) return;
-		if (isOffline) {
-			loadingPosts = false;
-			return;
-		}
-		loadingPosts = true;
-		fetchController = new AbortController();
-
-		try {
-			const res = await fetch('/api/blog/posts', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				signal: fetchController.signal,
-				body: JSON.stringify({ account: activeAccount, blogName, before_id: beforeId })
-			});
-
-			if (!res.ok) throw new Error('Failed to load posts');
-
-			const data = await res.json();
-			const newPosts = data.posts;
-
-			if (!newPosts || newPosts.length === 0) {
-				hasMore = false;
-			} else {
-				const existingIds = new Set(posts.map((p) => p.id));
-				const uniqueNew = newPosts.filter((p: any) => !existingIds.has(p.id));
-				
-				if (uniqueNew.length === 0) {
-					hasMore = false;
-				} else {
-					posts = [...posts, ...uniqueNew];
-					beforeId = Math.min(...uniqueNew.map((p: any) => p.id));
-					void bulkSetPosts(uniqueNew).then(() => refreshUnreferencedPosts());
-				}
-			}
-		} catch (err: any) {
-			if (err.name === 'AbortError') return;
-			error = err.message;
-		} finally {
-			if (fetchController && !fetchController.signal.aborted) {
-				loadingPosts = false;
-			}
-		}
-	}
+	onDestroy(() => feed.destroy());
 </script>
 
-<div class="min-h-screen p-4 md:p-8 bg-black">
+<div class="min-h-dvh p-4 md:p-8 bg-black">
 	<a href="/" class="btn btn-ghost mb-6 gap-2 text-white">
 		<ArrowLeft size={20} /> Back to Dashboard
 	</a>
 
-	{#if error && (typeof navigator === 'undefined' || navigator.onLine)}
-		<div class="alert alert-error">{error}</div>
+	{#if feed.error && (typeof navigator === 'undefined' || navigator.onLine)}
+		<div class="alert alert-error">{feed.error}</div>
 	{/if}
 
 	<!-- Blog Header -->
-	{#if loadingInfo}
+	{#if loadingInfo && !info}
 		<div class="flex justify-center py-10">
 			<span class="loading loading-spinner text-primary"></span>
 		</div>
@@ -337,14 +195,14 @@
 		<div class="bg-gray-900 rounded-3xl p-6 md:p-10 mb-8 shadow-xl flex flex-col md:flex-row gap-8 items-start">
 			<div class="avatar">
 				<div class="w-32 rounded-xl">
-					<img src={info.avatar[0]?.url || `https://api.tumblr.com/v2/blog/${blogName}/avatar/128`} alt="Avatar" />
+					<img src={`/api/avatar?blog=${encodeURIComponent(blogName)}&size=128`} alt="Avatar" />
 				</div>
 			</div>
-			
+
 			<div class="flex-1">
 				<h1 class="text-4xl font-bold text-white tracking-tight">{info.title || info.name}</h1>
 				<p class="text-gray-400 mt-1">@{info.name}</p>
-				
+
 				{#if info.description}
 					<div class="mt-4 prose prose-invert prose-sm">
 						{@html info.description}
@@ -356,7 +214,7 @@
 						<div class="stat-title">Posts</div>
 						<div class="stat-value text-2xl">{info.posts}</div>
 					</div>
-					
+
 					{#if info.likes > 0}
 						<a href={`/blog/${blogName}/likes`} class="stat bg-gray-800 rounded-2xl w-auto px-6 py-2 hover:bg-gray-700 transition-colors cursor-pointer group">
 							<div class="stat-title group-hover:text-pink-400 transition-colors">Favourites</div>
@@ -374,11 +232,18 @@
 	<div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between mb-6">
 		<h2 class="text-2xl font-bold text-white">Recent Posts</h2>
 		<div class="flex items-center gap-2 flex-wrap">
-			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 w-fit">
-				<button class="tab {currentFilter === 'all' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'all'}>All</button>
-				<button class="tab {currentFilter === 'photo' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'photo'}>Photos</button>
-				<button class="tab {currentFilter === 'video' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'video'}>Videos</button>
-				<button class="tab {currentFilter === 'text' ? 'tab-active bg-primary text-white' : 'text-gray-400'}" onclick={() => currentFilter = 'text'}>Text</button>
+			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-start">
+				{#each FILTERS as f}
+					{@const Icon = f.icon}
+					<button
+						class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+						onclick={() => { currentFilter = f.value; }}
+						title={f.label}
+					>
+						<Icon size={14} />
+						<span class="hidden sm:inline">{f.label}</span>
+					</button>
+				{/each}
 			</div>
 			<button
 				class="btn btn-sm btn-outline gap-2 border-gray-600 hover:bg-gray-800 text-gray-300"
@@ -389,37 +254,22 @@
 			</button>
 		</div>
 	</div>
+
 	<main>
-		<div bind:this={gridContainer} class="relative w-full" style={`height: ${virtualHeight}px;`}>
-			{#if cardWidth > 0}
-				{#each visibleRows as rowItem (rowItem.row)}
-					<div
-						class="absolute"
-						style={`top: ${rowItem.row * rowStride}px; left: 0; right: 0;`}
-					>
-						<div
-							class="grid"
-							style={`grid-template-columns: repeat(${columnCount}, minmax(0, 1fr)); gap: ${GRID_GAP_PX}px;`}
-						>
-							{#each rowItem.posts as post (post.id)}
-								<div id={"post-" + post.id}>
-									<PostCard {post} onMediaClick={openSlideshowFromPost} />
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/each}
-			{/if}
-		</div>
+		<PostGrid
+			posts={filteredPosts}
+			columnSetting={$settings.mediaColumns}
+			onMediaClick={openSlideshowFromPost}
+		/>
 	</main>
 
-	{#if filteredPosts.length === 0 && posts.length > 0}
+	{#if filteredPosts.length === 0 && feed.items.length > 0}
 		<div class="py-20 text-center text-gray-500">
 			No posts match the current filter.
 		</div>
 	{/if}
 
-	<InfiniteScroll {hasMore} loading={loadingPosts} onload={loadPosts} />
+	<InfiniteScroll hasMore={feed.hasMore} {loading} onload={feed.loadMore} />
 </div>
 
 <Slideshow
@@ -428,5 +278,5 @@
 	startPostId={slideshowStartPostId}
 	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredPosts}
-	onReachEnd={async () => { await loadPosts(); }}
+	onReachEnd={async () => { await feed.loadMore(); }}
 />
