@@ -174,7 +174,7 @@
 				<Search size={32} class="text-blue-500" />
 				Search
 			</h1>
-			<p class="text-gray-400 mt-1">Search Tumblr tags. <span class="text-blue-400/80 text-xs font-bold block mt-1 uppercase tracking-wider">Note: Global keyword search is unsupported by the Tumblr API.</span></p>
+			<p class="text-gray-400 mt-1">Search tags. <span class="text-blue-400/80 text-xs font-bold block mt-1 uppercase tracking-wider">Note: Global keyword search is unsupported by the API.</span></p>
 		</div>
 
 		<!-- Central Search Bar -->

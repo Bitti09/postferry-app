@@ -319,8 +319,8 @@
 			<div class="hero-content text-center">
 				<div class="max-w-md">
 					<h1 class="text-5xl font-bold text-white">Welcome!</h1>
-					<p class="py-6">Connect your Tumblr account to see your merged chronological dashboard.</p>
-					<button class="btn btn-primary" onclick={handleAddAccount}>Connect Tumblr</button>
+					<p class="py-6">Connect an account to see your merged chronological feed.</p>
+					<button class="btn btn-primary" onclick={handleAddAccount}>Connect account</button>
 				</div>
 			</div>
 		</div>
