@@ -6,7 +6,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	server: {
 		// Comma-separated hostnames for tunnels/dev domains, e.g.
-		// VITE_ALLOWED_HOSTS=abc.tunnel-free.app,preview.example.com
+		// VITE_ALLOWED_HOSTS=your-dev-host.example.com,preview.example.com
 		allowedHosts: process.env.VITE_ALLOWED_HOSTS
 			? process.env.VITE_ALLOWED_HOSTS.split(',')
 					.map((host) => host.trim())
