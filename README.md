@@ -205,6 +205,26 @@ for the documented v2 endpoints, OAuth 1.0a/OAuth 2.0, NPF and legacy post
 types, retries, multi-account fan-out, and feed merging. See its
 `API-COVERAGE.md` for the endpoint and NPF coverage map.
 
+## Personal use
+
+This project is intended for **personal, local, single-user use**:
+
+- Run it on your own machine and connect your own accounts with your own
+  registered Tumblr application credentials.
+- There is no public hosted instance maintained by this project. Each user runs
+  their own copy.
+- Personal/local use lowers exposure; it does **not** exempt you from Tumblr's
+  terms or the Application Developer and API License Agreement.
+- The offline library and merged multi-account feed are personal-use features
+  that may not satisfy the agreement's three-day caching and content-order
+  rules. For a public, shared, or multi-user deployment, seek written
+  permission from Tumblr or change those features before deploying.
+- If you expose the app to other people, you are operating a Licensee
+  Application and are responsible for the agreement's caching, attribution,
+  privacy, and content-ordering requirements.
+
+The software is provided as-is, without warranty. Use it at your own risk.
+
 ## Legal
 
 This application is **not** official, endorsed, sponsored by, or otherwise
