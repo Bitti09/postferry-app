@@ -1,13 +1,15 @@
-# tmblr — Optimization & Feature Plan
+# Postferry — historical optimization plan
 
 Scope: multi-account everywhere, cache-first media + feeds at thousands-of-images scale, full Tumblr API usage, and a real download function that always saves the highest resolution shown.
+
+> Historical document. Some API details below are outdated; see `README.md` and the `postferry` package's `API-COVERAGE.md` for the current implementation. The old project name is intentionally not used.
 Docs: Tumblr API v2 + tumblr.js v5 verified via Context7 (`/websites/tumblr_github_io_tumblr_js`) and tumblr.com/docs/en/api/v2. Key facts used: `userLikes` paginates with `before`/`after` (offset caps at 1000), `userDashboard` supports `since_id`/`before_id`, `limit` max 20 per page, `tagged` is api-key-global (not account-scoped) and paginates only by `before` timestamp, Tumblr media CDN sends `access-control-allow-origin: *` (verified live).
 
 ---
 
 ## P0 — Correctness bugs found during scan
 
-1. **Viewed media is never persisted.** `service-worker.ts` handles `/api/media/proxy` cache-first, but on a miss it does `fetch(event.request)` and returns *without* `cache.put` into `tmblr-media`. Only explicit `CACHE_MEDIA` messages write the cache. Fix: SW fetches the target URL itself, `cache.put`s it, then responds (see P1.1).
+1. **Viewed media is never persisted.** `service-worker.ts` handles `/api/media/proxy` cache-first, but on a miss it does `fetch(event.request)` and returns *without* `cache.put` into `media cache`. Only explicit `CACHE_MEDIA` messages write the cache. Fix: SW fetches the target URL itself, `cache.put`s it, then responds (see P1.1).
 2. **`parseTumblrMediaUrl` misses real Tumblr size patterns.** Regex `^(.*?_)(?:(\d+)|([a-zA-Z0-9]+))\.` doesn't match `s1280x1920`-style variants (`.../s512x512u_c1/...`, `sNNNxNNN` segments), so cache-upgrade dedupe misfires on a large share of assets. Rewrite to canonicalize both `_1280` and `sWxH` forms.
 3. **`activeDownloads` O(n²) Set copying.** `requestMediaDownload` calls `setActive(url, true)` at *queue* time, and every add/remove copies the whole Set (`new Set(set)`). 5 000 queued items → ~12.5 M Set-element copies. Fix: mark active only when dispatched (in `pumpQueue`), or replace with a mutable Set + version counter.
 4. **`vite.config.ts` hardcodes PWA `mode: 'development'`** — production builds ship a dev service worker. Derive from `process.env.NODE_ENV` / vite `mode`.
@@ -16,7 +18,7 @@ Docs: Tumblr API v2 + tumblr.js v5 verified via Context7 (`/websites/tumblr_gith
 ## P1 — Media pipeline: cache-first, thousands of images, no double hop
 
 1. **SW fetches Tumblr media directly; kill the Node proxy hop for images.**
-   - CDN already returns `ACAO: *` → the SW can `fetch(targetUrl)` cross-origin with a *readable* (non-opaque) response, `cache.put(targetUrl, res)` into `tmblr-media`, respond, and broadcast `MEDIA_CACHED`. `/api/media/proxy` stays only as fallback for hosts without CORS and for first-play video `Range` streaming.
+   - CDN already returns `ACAO: *` → the SW can `fetch(targetUrl)` cross-origin with a *readable* (non-opaque) response, `cache.put(targetUrl, res)` into `media cache`, respond, and broadcast `MEDIA_CACHED`. `/api/media/proxy` stays only as fallback for hosts without CORS and for first-play video `Range` streaming.
    - Win: halves transfer + latency for every uncached image, works with the app server down, removes the proxy as a bandwidth bottleneck for bulk caching.
 2. **Display sized variants; cache exactly what's displayed.**
    - Grid cards currently request the full-size (often 1280 px/original) URL for ~200 px cells → decode + bandwidth waste at 7-column scale.
@@ -39,7 +41,7 @@ Docs: Tumblr API v2 + tumblr.js v5 verified via Context7 (`/websites/tumblr_gith
 New `$lib/download.ts`; UI: Download buttons on PostCard overlay, Lightbox, Slideshow, and post detail ("save media").
 
 1. **Resolve the true best source** from `variants` (P1.2): prefer `has_original_dimensions && !cropped`, then max area, `hd` flag as tiebreak — same rules as `pickBestMediaUrl` but returning the object, not just the URL. GIFs/WebP originals stay original; native video → largest rendition MP4; third-party provider embeds (YouTube etc.) → button disabled with tooltip (not downloadable).
-2. **Acquisition path:** if the best URL is already in `tmblr-media` → read blob from Cache API. Else run it through the download queue as a `download`-priority item (reuses concurrency, backoff, progress UI). Never downgrades: the variant fetched for saving is always the original/best, independent of what the grid displayed.
+2. **Acquisition path:** if the best URL is already in `media cache` → read blob from Cache API. Else run it through the download queue as a `download`-priority item (reuses concurrency, backoff, progress UI). Never downgrades: the variant fetched for saving is always the original/best, independent of what the grid displayed.
 3. **Save:** `Blob` → object URL → `<a download>` with filename `{blogName}_{postId}_{n}.{ext}` (ext from content-type/URL), then `revokeObjectURL`. Multi-item posts: sequential anchor clicks with ~300 ms spacing (browser multi-download prompt); no zip dependency.
 4. **Cache upgrade tie-in:** after saving the original, replace any lower-res cached variant (via the P1.7 index lookup) so disk reflects what the user saved.
 5. Progress: reuse `activeDownloads` state; bulk "download all shown" gated by the existing progress bar components.
@@ -73,11 +75,11 @@ Dashboard, likes, and following already fan out per account (`accounts[]` payloa
 Verified status: Storage Buckets API is **Chromium-only** (Chrome/Edge 122+, caniuse; no Firefox/Safari signal). OPFS + Cache Storage + IDB are universal. Bundled TS `lib.dom` has no `storageBuckets` types → add ~20-line ambient `.d.ts`.
 
 1. **Two buckets with different eviction fates** (feature-detect `navigator.storageBuckets`, fallback = today's behavior + existing `persist()`):
-   - `app-data`: the Dexie DB (`tmblr-cache-new`: accounts/tokens, settings, post index, cursors) → `open('app-data', { persisted: true, durability: 'strict' })`. This is the irreplaceable data — re-auth and an empty offline index are the real losses. Today `persist()` in `+layout.svelte` is all-or-nothing; under pressure Chrome can wipe the whole origin *including tokens*.
-   - `media-cache`: the `tmblr-media` Cache Storage → `open('media-cache', { persisted: false, durability: 'relaxed' })`. Media is re-fetchable; make it the designated sacrifice zone so pressure eviction takes blobs, never credentials.
-   - Bucket exposes `.indexedDB` / `.caches` — Dexie accepts an injected `indexedDB` factory; Cache API usage is unchanged (`bucket.caches.open('tmblr-media')` instead of `caches.open`). Buckets work in workers, so the SW can open `media-cache` too.
+   - `app-data`: the Dexie DB (`app database`: accounts/tokens, settings, post index, cursors) → `open('app-data', { persisted: true, durability: 'strict' })`. This is the irreplaceable data — re-auth and an empty offline index are the real losses. Today `persist()` in `+layout.svelte` is all-or-nothing; under pressure Chrome can wipe the whole origin *including tokens*.
+   - `media-cache`: the `media cache` Cache Storage → `open('media-cache', { persisted: false, durability: 'relaxed' })`. Media is re-fetchable; make it the designated sacrifice zone so pressure eviction takes blobs, never credentials.
+   - Bucket exposes `.indexedDB` / `.caches` — Dexie accepts an injected `indexedDB` factory; Cache API usage is unchanged (`bucket.caches.open('media cache')` instead of `caches.open`). Buckets work in workers, so the SW can open `media-cache` too.
    - **Refactor cost flagged:** `db` is currently constructed at module load; moving it into a bucket needs an async `initDb()` (awaited in layout before stores hydrate) or a lazy proxy. Do this as its own step, not drive-by.
-   - **Migration:** existing installs have data in the default origin space. One-time lazy migration during idle: copy `tmblr-media` keys into the bucket cache (chunked, background), copy IDB via Dexie `export`/table-by-table, then delete the old stores. If migration is interrupted, next run resumes — entries are content-addressed by URL.
+   - **Migration:** existing installs have data in the default origin space. One-time lazy migration during idle: copy `media cache` keys into the bucket cache (chunked, background), copy IDB via Dexie `export`/table-by-table, then delete the old stores. If migration is interrupted, next run resumes — entries are content-addressed by URL.
 2. **OPFS — only for video, not images.** Chrome's own guidance keeps Cache Storage for HTTP resources; images at 500 px variants are small and `cache.put`/`match` is ideal. Videos are the 4 GB-cap risk and where OPFS pays: streaming write (`response.body.pipeTo(writable)`, no full-buffer materialization), cheap `file.size` (vs `(await res.blob()).size`), ~9× faster large writes (100 MB ≈ 90 ms vs ≈ 850 ms IDB; Cache API sits between), random access for serving `Range` requests from the SW. Optional stage: SW serves video URLs from an OPFS file with 206 slicing; IDB keeps the index. Keep Cache Storage for images/posters/avatars regardless.
 3. **Byte-aware eviction.** `eviction.ts` evicts by entry count (20k) and only halves on an `estimate()` overrun — a few huge videos defeat it. Store `size` (Content-Length) on `mediaUrls` rows (Dexie v4, alongside P1.7's `base`/`size` columns) and evict by `cachedAt`-ordered running byte total. With OPFS video this becomes exact (`file.size`).
 4. **Quota hygiene.** Before "Cache All"/bulk downloads: `estimate()` headroom check (usage + expected > 90 % of quota → run maintenance first, warn); surface `persisted()` state and per-bucket usage on `/caches`. Keep `navigator.storage.persist()` for the fallback path on Firefox/Safari.

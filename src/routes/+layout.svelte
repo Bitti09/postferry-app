@@ -9,7 +9,6 @@
 	import { accounts, accountsReady } from "#lib/stores/accounts";
 	import { refreshUnreferencedPosts } from "#lib/stores/unreferencedPosts";
 	import { initMediaCacheStatus } from "../lib/mediaCacheStatus.svelte.ts";
-	import { migrateLegacyCaches } from "#lib/cache/storageMigration";
 	import { scheduleMediaMaintenance } from "#lib/cache/eviction";
 	import { setQueueDrainHandler } from "#lib/stores/downloads";
 	import type { TumblrAccount } from "#lib/types";
@@ -23,9 +22,7 @@
 			// On localhost this is always false but data is safe in practice.
 		}
 		if (browser) {
-			// Move Cache Storage media into OPFS first, so the registry below
-			// warms from the index that matches what is actually on disk.
-			void migrateLegacyCaches().then(() => initMediaCacheStatus());
+			initMediaCacheStatus();
 			// Orphan GC + size-cap eviction, debounced so it runs after the
 			// feed has settled, not during initial renders.
 			scheduleMediaMaintenance();

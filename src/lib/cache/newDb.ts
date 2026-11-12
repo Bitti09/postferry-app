@@ -83,7 +83,7 @@ export function mediaAssetBase(url: string): string {
 	return clean;
 }
 
-export class TmblrCacheDB extends Dexie {
+export class PostferryCacheDB extends Dexie {
 	posts!: Table<CachedPostEntry, string>;
 	mediaUrls!: Table<StoredMediaUrl, string>;
 	meta!: Table<{ key: string; value: any }, string>;
@@ -95,7 +95,7 @@ export class TmblrCacheDB extends Dexie {
 	followedBlogs!: Table<CachedFollowedList, string>;
 
 	constructor() {
-		super('tmblr-cache-new');
+		super('postferry-cache');
 		this.version(1).stores({
 			posts: 'id, cachedAt, [cachedFromBlog+cachedAt], cachedFromBlog',
 			mediaUrls: 'url, postId',
@@ -166,9 +166,7 @@ export class TmblrCacheDB extends Dexie {
 
 /* ── one-time move of the origin database into the persistent bucket ────── */
 
-// Legacy internal database name; kept so existing users keep their cached
-// posts. It is not user-facing branding.
-const DB_NAME = 'tmblr-cache-new';
+const DB_NAME = 'postferry-cache';
 const MIGRATED_FLAG = 'offline-bucket-db-migrated-v1';
 
 async function dbExists(factory: IDBFactory, name: string): Promise<boolean> {
@@ -204,11 +202,11 @@ async function migrateDbToBucket(bucketIdb: IDBFactory): Promise<void> {
 			// `globalThis.indexedDB` is always the origin factory, even after a
 			// dev HMR re-evaluation has installed the bucket factory globally.
 			Dexie.dependencies.indexedDB = indexedDB;
-			const source = new TmblrCacheDB();
+			const source = new PostferryCacheDB();
 			await source.open();
 
 			Dexie.dependencies.indexedDB = bucketIdb;
-			const target = new TmblrCacheDB();
+			const target = new PostferryCacheDB();
 			await target.open();
 			for (const table of source.tables) {
 				const rows = await table.toArray();
@@ -240,4 +238,4 @@ if (browser) {
 }
 
 /* Constructed only after the bucket factory is installed. */
-export const db = new TmblrCacheDB();
+export const db = new PostferryCacheDB();
