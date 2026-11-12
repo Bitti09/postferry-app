@@ -144,10 +144,13 @@ the same post returned by multiple accounts into one object carrying
 
 ### Offline cache
 
-- Posts and metadata: a Dexie database, optionally inside a persistent storage
-  bucket.
+- Posts and metadata: a Dexie database in the persistent `postferry-data`
+  storage bucket (or origin IndexedDB when buckets are unavailable).
 - Media: OPFS directory `media`, keyed by a deterministic hash of the URL.
 - App shell and navigation: service worker with an OPFS app directory.
+- Startup cleanup: legacy database, cache, bucket, and localStorage names are
+  deleted on first load. Only `postferry-*` storage is kept; pre-rename local
+  data is intentionally discarded.
 - Eviction: oldest media is removed first, capped at 20,000 entries / 4 GB,
   with a stricter byte cap when the browser reports pressure.
 - Media URLs are recorded in `mediaUrls` so a post's blobs can be found without
