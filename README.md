@@ -8,10 +8,18 @@ into one chronological feed, renders posts and notes, and keeps media available
 offline through a service worker, IndexedDB, and the Origin Private File System
 (OPFS).
 
-> **Unofficial project.** This app is not affiliated with, endorsed by, or
-> sponsored by Tumblr, Inc. or Automattic, Inc. “Tumblr” is a trademark of
-> Tumblr, Inc., used only to describe API compatibility. See
-> [Legal](#legal) below.
+## ⚠️ Notice ⚠️
+
+---
+
+This application is **NOT** official, endorsed, sponsored by, or otherwise
+associated with Tumblr in any way, shape, or form.
+
+It was built using the API reference documents, and like any other project
+built using the API (including those made using this app) should conform to the
+[Tumblr Application Developer and API License
+Agreement](https://www.tumblr.com/docs/api_agreement). Be sure you also follow
+it.
 
 ## Features
 
