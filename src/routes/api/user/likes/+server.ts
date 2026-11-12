@@ -1,8 +1,21 @@
 import { forAccounts, readAccounts } from '#lib/server/clients';
-import { mergeFeedPosts, type TumblrPost } from 'postferry';
+import { mergeFeedPost, type TumblrPost } from 'postferry';
 import type { RequestHandler } from './$types';
 
-/** Multi-account likes merge. Per-account `before` (liked_timestamp) cursors. */
+interface LikesGroup {
+	blogName: string;
+	ok: boolean;
+	/** Posts in the order the account's likes endpoint returned them. */
+	posts: TumblrPost[];
+	newBefore?: number;
+	error?: string;
+	status?: number;
+}
+
+/**
+ * Per-account likes streams. No cross-account merge, sort or dedupe: each group
+ * keeps the API's liked_timestamp order and its own `before` cursor.
+ */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await readAccounts(request);
 	if (!body) {
@@ -19,8 +32,16 @@ export const POST: RequestHandler = async ({ request }) => {
 			...(accountBefore ? { before: Number(accountBefore) } : {})
 		});
 		const likedPosts = (data.liked_posts ?? []) as TumblrPost[];
+
+		const posts = likedPosts.map((post) =>
+			mergeFeedPost(undefined, post, account.blogName, {
+				liked: true,
+				reblogged: post.reblogged === true
+			})
+		);
+
 		return {
-			likedPosts,
+			posts,
 			newBefore:
 				likedPosts.length > 0
 					? likedPosts[likedPosts.length - 1]!.liked_timestamp
@@ -28,26 +49,24 @@ export const POST: RequestHandler = async ({ request }) => {
 		};
 	});
 
-	const likes = mergeFeedPosts(
-		results.flatMap((result) =>
-			result.ok && result.value
-				? [{ account: result.accountBlogName, posts: result.value.likedPosts, liked: true }]
-				: []
-		),
-		'liked'
-	);
-
-	const newBefore: Record<string, number> = {};
-	for (const result of results) {
-		if (!result.ok || !result.value) continue;
-		if (result.value.newBefore !== undefined) {
-			newBefore[result.accountBlogName] = Number(result.value.newBefore);
+	const groups: LikesGroup[] = results.map((result) => {
+		if (!result.ok || !result.value) {
+			return {
+				blogName: result.accountBlogName,
+				ok: false,
+				posts: [],
+				error: result.error,
+				status: result.status
+			};
 		}
-	}
-
-	return Response.json({
-		liked_posts: likes,
-		newBefore,
-		accountResponses: results
+		return {
+			blogName: result.accountBlogName,
+			ok: true,
+			posts: result.value.posts,
+			newBefore:
+				result.value.newBefore !== undefined ? Number(result.value.newBefore) : undefined
+		};
 	});
+
+	return Response.json({ groups, accountResponses: results });
 };

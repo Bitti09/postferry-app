@@ -4,10 +4,10 @@ A multi-account Tumblr feed viewer and offline media library built with
 SvelteKit 5. It is an unofficial, specialized reader — not a replacement for
 Tumblr's dashboard.
 
-It merges the feeds, likes, and followed blogs of several Tumblr accounts
-into one chronological feed, renders posts and notes, and keeps media available
-offline through a service worker, IndexedDB, and the Origin Private File System
-(OPFS).
+It shows each connected account’s feed and likes in a separate tab, in the
+exact order the API returned them, renders posts and notes, and keeps media
+available offline through a service worker, IndexedDB, and the Origin Private
+File System (OPFS).
 
 ## ⚠️ Notice ⚠️
 
@@ -24,8 +24,9 @@ it.
 
 ## Features
 
-- **One merged feed** from any number of active Tumblr accounts, with
-  per-account `likedBy` / `rebloggedBy` state preserved through the merge.
+- **Per-account streams** for any number of active accounts, with a scrollable
+  account tab bar. Each tab preserves its API order; there is no cross-account
+  sort, merge, or dedupe.
 - **Likes, following, blog posts, blog likes, tag search, and post detail**
   pages, with filters for text, photo, video, audio, quote, link, chat, and
   asks.
@@ -108,8 +109,8 @@ repository; the app has no local copy of that package.
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Merged feed with filters, slideshow, and bulk media caching |
-| `/likes` | Merged likes from every active account |
+| `/` | Per-account feed tabs with filters, slideshow, and bulk media caching |
+| `/likes` | Per-account likes tabs, each in API order |
 | `/following` | Blogs followed by each account |
 | `/accounts` | Connected accounts, activation, account info, and favourites caching |
 | `/search` | Tumblr tag search |
@@ -120,7 +121,7 @@ repository; the app has no local copy of that package.
 | `/post/[blogName]/[postId]` | Post detail, trail, notes, likes, and offline media |
 | `/debug-cache`, `/debug-upscaler` | Development-only diagnostics |
 
-Server routes live under `src/routes/api/` and cover auth, feed, likes,
+Server routes live under `src/routes/api/` and cover auth, per-account feeds, likes,
 posts, blog info/posts/likes, following, user info, search, avatar proxying,
 and media proxying.
 
@@ -137,13 +138,16 @@ calls locally with a 429 instead of hammering Tumblr. OAuth request/access token
 `src/routes/api/auth/` and are also handled by `postferry`. No Tumblr API call
 is made directly by the browser.
 
-### Multi-account merge
+### Per-account streams
 
-Posts are keyed by `id_string`, never the lossy numeric `id`. The server merges
-the same post returned by multiple accounts into one object carrying
-`likedBy`, `rebloggedBy`, `seenBy`, `sources`, and the most recent
-`liked_timestamp`. The client keeps a stable `cachedAt` and a separate
-`updatedAt`, so cursor pagination cannot skip or repeat rows after a refresh.
+The dashboard and likes endpoints return one group per account, in the order
+Tumblr returned that account’s posts. The client never sorts, deduplicates, or
+interleaves across accounts. Each tab keeps its own cursor and lazy-loads only
+when selected, so ten or more accounts do not fan out into a single burst.
+
+Posts are still keyed by `id_string`, never the lossy numeric `id`, and cached
+entries carry per-account `likedBy`/`rebloggedBy` plus a stable `cachedAt` and a
+separate `updatedAt`.
 
 ### Offline cache
 
@@ -215,10 +219,10 @@ This project is intended for **personal, local, single-user use**:
   their own copy.
 - Personal/local use lowers exposure; it does **not** exempt you from Tumblr's
   terms or the Application Developer and API License Agreement.
-- The offline library and merged multi-account feed are personal-use features
-  that may not satisfy the agreement's three-day caching and content-order
-  rules. For a public, shared, or multi-user deployment, seek written
-  permission from Tumblr or change those features before deploying.
+- The offline library is a personal-use feature that may not satisfy the
+  agreement’s three-day caching rules. The dashboard and likes views keep each
+  account in API order; if you add a combined cross-account stream, seek written
+  permission from Tumblr before deploying it.
 - If you expose the app to other people, you are operating a Licensee
   Application and are responsible for the agreement's caching, attribution,
   privacy, and content-ordering requirements.

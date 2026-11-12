@@ -1,14 +1,24 @@
-import { forAccounts, readAccounts, type AccountCredentials } from '#lib/server/clients';
-import { mergeFeedPosts, postId, type DashboardParams, type PostType, type TumblrPost } from 'postferry';
+import { forAccounts, readAccounts } from '#lib/server/clients';
+import { mergeFeedPost, postId, type DashboardParams, type PostType, type TumblrPost } from 'postferry';
 import type { RequestHandler } from './$types';
 
+interface AccountGroup {
+	blogName: string;
+	ok: boolean;
+	/** Posts in the exact order the API returned them. */
+	posts: TumblrPost[];
+	newOffset?: number;
+	newSinceId?: string;
+	error?: string;
+	status?: number;
+}
+
 /**
- * Multi-account dashboard merge.
+ * Per-account dashboard streams.
  *
- * Per the current API docs `/user/dashboard` paginates with `offset` and
- * `since_id`; it has no `before_id` parameter. The client therefore keeps a
- * numeric offset per account for older pages and a `since_id` per account for
- * refreshes.
+ * Posts are never merged across accounts, deduplicated across accounts, or
+ * re-sorted here. Each group preserves the order of its `/user/dashboard`
+ * response. The client renders one account at a time.
  */
 export const POST: RequestHandler = async ({ request }) => {
 	const body = await readAccounts(request);
@@ -39,35 +49,43 @@ export const POST: RequestHandler = async ({ request }) => {
 		const data = await client.userDashboard(params);
 		const posts = (data.posts ?? []) as TumblrPost[];
 		const numericOffset = Number(offset ?? 0);
+
+		// Attach the per-account liked/reblogged metadata for the cache without
+		// changing the array order.
+		const decorated = posts.map((post) =>
+			mergeFeedPost(undefined, post, account.blogName, {
+				liked: post.liked === true,
+				reblogged: post.reblogged === true
+			})
+		);
+
 		return {
-			posts,
-			// Newest id for the next refresh. Numeric max keeps this correct
-			// regardless of response ordering.
+			posts: decorated,
 			newSinceId: posts.length > 0 ? maxPostId(posts) : undefined,
-			// Next older page.
 			newOffset: posts.length > 0 ? numericOffset + posts.length : undefined
 		};
 	});
 
-	const batches = results.flatMap((result) =>
-		result.ok && result.value ? [{ account: result.accountBlogName, posts: result.value.posts }] : []
-	);
-	const posts = mergeFeedPosts(batches, 'timestamp');
-
-	const newOffsets: Record<string, number> = {};
-	const newSinceIds: Record<string, string> = {};
-	for (const result of results) {
-		if (!result.ok || !result.value) continue;
-		if (result.value.newOffset !== undefined) newOffsets[result.accountBlogName] = result.value.newOffset;
-		if (result.value.newSinceId) newSinceIds[result.accountBlogName] = result.value.newSinceId;
-	}
-
-	return Response.json({
-		posts,
-		newOffsets,
-		newSinceIds,
-		accountResponses: results
+	const groups: AccountGroup[] = results.map((result) => {
+		if (!result.ok || !result.value) {
+			return {
+				blogName: result.accountBlogName,
+				ok: false,
+				posts: [],
+				error: result.error,
+				status: result.status
+			};
+		}
+		return {
+			blogName: result.accountBlogName,
+			ok: true,
+			posts: result.value.posts,
+			newOffset: result.value.newOffset,
+			newSinceId: result.value.newSinceId
+		};
 	});
+
+	return Response.json({ groups, accountResponses: results });
 };
 
 function maxPostId(posts: ReadonlyArray<TumblrPost>): string {
