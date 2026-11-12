@@ -5,7 +5,13 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
 	server: {
-		allowedHosts: ['your-dev-host.example.com']
+		// Comma-separated hostnames for tunnels/dev domains, e.g.
+		// VITE_ALLOWED_HOSTS=abc.tunnel-free.app,preview.example.com
+		allowedHosts: process.env.VITE_ALLOWED_HOSTS
+			? process.env.VITE_ALLOWED_HOSTS.split(',')
+					.map((host) => host.trim())
+					.filter(Boolean)
+			: []
 	},
 	plugins: [
 		tailwindcss(),
