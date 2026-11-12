@@ -67,12 +67,12 @@
 			}
 		};
 
-		window.addEventListener('tmblr-media-cached', onCached);
-		window.addEventListener('tmblr-media-error', onError);
+		window.addEventListener('postferry-media-cached', onCached);
+		window.addEventListener('postferry-media-error', onError);
 
 		return () => {
-			window.removeEventListener('tmblr-media-cached', onCached);
-			window.removeEventListener('tmblr-media-error', onError);
+			window.removeEventListener('postferry-media-cached', onCached);
+			window.removeEventListener('postferry-media-error', onError);
 		};
 	});
 

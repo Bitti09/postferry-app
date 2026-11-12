@@ -1,5 +1,6 @@
 {
-	"name": "tmblr",
+	"name": "postferry-app",
+	"description": "Unofficial multi-account Tumblr feed viewer with an offline media cache.",
 	"private": true,
 	"version": "0.0.1",
 	"license": "AGPL-3.0-only",

@@ -1,9 +1,10 @@
-# tmblr
+# Postferry
 
-A multi-account Tumblr dashboard and offline media library built with
-SvelteKit 5.
+A multi-account Tumblr feed viewer and offline media library built with
+SvelteKit 5. It is an unofficial, specialized reader — not a replacement for
+Tumblr's dashboard.
 
-It merges the dashboards, likes, and followed blogs of several Tumblr accounts
+It merges the feeds, likes, and followed blogs of several Tumblr accounts
 into one chronological feed, renders posts and notes, and keeps media available
 offline through a service worker, IndexedDB, and the Origin Private File System
 (OPFS).
@@ -59,8 +60,8 @@ it.
 ## Getting started
 
 ```sh
-git clone git@github.com:Bitti09/tmblr.git
-cd tmblr
+git clone git@github.com:Bitti09/postferry-app.git
+cd postferry-app
 pnpm install
 cp .env.example .env
 ```
@@ -87,7 +88,7 @@ instead of hard-coding it in `vite.config.ts`:
 VITE_ALLOWED_HOSTS=your-tunnel.example.com pnpm dev
 ```
 
-Then use **Add Account** on the dashboard to complete the OAuth flow.
+Then use **Add Account** on the feed to complete the OAuth flow.
 
 ## Scripts
 
@@ -107,7 +108,7 @@ repository; the app has no local copy of that package.
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Merged dashboard with filters, slideshow, and bulk media caching |
+| `/` | Merged feed with filters, slideshow, and bulk media caching |
 | `/likes` | Merged likes from every active account |
 | `/following` | Blogs followed by each account |
 | `/accounts` | Connected accounts, activation, account info, and favourites caching |
@@ -119,7 +120,7 @@ repository; the app has no local copy of that package.
 | `/post/[blogName]/[postId]` | Post detail, trail, notes, likes, and offline media |
 | `/debug-cache`, `/debug-upscaler` | Development-only diagnostics |
 
-Server routes live under `src/routes/api/` and cover auth, dashboard, likes,
+Server routes live under `src/routes/api/` and cover auth, feed, likes,
 posts, blog info/posts/likes, following, user info, search, avatar proxying,
 and media proxying.
 
@@ -143,8 +144,8 @@ the same post returned by multiple accounts into one object carrying
 
 ### Offline cache
 
-- Posts and metadata: Dexie database `tmblr-cache-new`, optionally inside a
-  persistent storage bucket.
+- Posts and metadata: a Dexie database, optionally inside a persistent storage
+  bucket.
 - Media: OPFS directory `media`, keyed by a deterministic hash of the URL.
 - App shell and navigation: service worker with an OPFS app directory.
 - Eviction: oldest media is removed first, capped at 20,000 entries / 4 GB,

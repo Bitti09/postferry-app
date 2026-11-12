@@ -1,5 +1,5 @@
 // ─── cacheUtils ─────────────────────────────────────────────────────────────
-// Bulk cache orchestrator. Used by Dashboard / Likes / Search / Blog pages
+// Bulk cache orchestrator. Used by Feed / Likes / Search / Blog pages
 // when the user clicks "Cache Visible". Streams post → URL mapping through
 // `bulkIsMediaCached` for the existence check, then `requestMediaDownload`
 // per URL. Concurrency is bounded by the download queue in

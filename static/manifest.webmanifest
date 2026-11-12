@@ -1,7 +1,7 @@
 {
-	"short_name": "tmblr",
-	"name": "tmblr Offline Reader",
-	"description": "Offline-first Tumblr Reader",
+	"short_name": "Postferry",
+	"name": "Postferry",
+	"description": "Unofficial offline-first Tumblr feed reader",
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",
@@ -19,19 +19,6 @@
 			"sizes": "512x512",
 			"type": "image/png",
 			"purpose": "any"
-		}
-	],
-	"screenshots": [
-		{
-			"src": "screenshot-desktop.png",
-			"sizes": "1280x720",
-			"type": "image/png",
-			"form_factor": "wide"
-		},
-		{
-			"src": "screenshot-mobile.png",
-			"sizes": "750x1334",
-			"type": "image/png"
 		}
 	]
 }

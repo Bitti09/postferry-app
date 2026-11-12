@@ -43,11 +43,11 @@ function waitForCached(url: string, timeoutMs = 120_000): Promise<boolean> {
 	};
 	function cleanup() {
 		clearTimeout(timer);
-		window.removeEventListener('tmblr-media-cached', onCached);
-		window.removeEventListener('tmblr-media-error', onError);
+		window.removeEventListener('postferry-media-cached', onCached);
+		window.removeEventListener('postferry-media-error', onError);
 	}
-	window.addEventListener('tmblr-media-cached', onCached);
-	window.addEventListener('tmblr-media-error', onError);
+	window.addEventListener('postferry-media-cached', onCached);
+	window.addEventListener('postferry-media-error', onError);
 	return promise;
 }
 

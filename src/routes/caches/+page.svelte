@@ -298,7 +298,7 @@
 					<HardDrive size={48} class="mx-auto mb-4 text-gray-600" />
 					<h2 class="text-3xl font-bold text-white">Cache is empty</h2>
 					<p class="py-6 text-gray-500">Go back to the dashboard and scroll to cache some media.</p>
-					<a href="/" class="btn btn-primary">Go to Dashboard</a>
+					<a href="/" class="btn btn-primary">Go to Feed</a>
 				</div>
 			</div>
 		</div>

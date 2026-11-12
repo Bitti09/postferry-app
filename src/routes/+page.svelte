@@ -213,7 +213,7 @@
 		<div>
 			<h1 class="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
 				<Home size={32} class="text-blue-500" />
-				Dashboard
+				Feed
 			</h1>
 			<p class="text-gray-400 mt-1">Your merged chronological feed.</p>
 		</div>

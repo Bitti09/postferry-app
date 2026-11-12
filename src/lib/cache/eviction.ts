@@ -6,7 +6,7 @@ import { activeDownloads } from '#lib/stores/downloads';
 import { dropCachedUrl } from '../mediaCacheStatus.svelte.ts';
 
 // Bounded offline cache: without this, 10+ accounts with thousands of
-// images/videos grow tmblr-media until the browser's storage quota kills it.
+// images/videos grow the media cache until the browser's quota kills it.
 const MAX_ENTRIES = 20_000;
 const MAX_BYTES = 4 * 1024 * 1024 * 1024; // 4 GB
 // If total storage usage blows past the byte cap, shrink much harder —

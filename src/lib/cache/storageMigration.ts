@@ -9,6 +9,9 @@ const FLAG = 'cache-to-opfs-migrated-v1';
  * OPFS, with matching rows in the `mediaUrls` index. After this runs the app
  * uses no Cache Storage at all.
  *
+ * The legacy `tmblr-media` Cache Storage name is kept only as a migration
+ * source. It is not user-facing branding.
+ *
  * `postId: 0` marks migrated media whose post cannot be identified from the
  * cache key; GC leaves those rows alone and LRU eviction eventually removes
  * them instead of wiping the whole library.

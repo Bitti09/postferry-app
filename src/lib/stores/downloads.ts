@@ -202,7 +202,7 @@ if (browser && navigator.serviceWorker) {
 			}
 
 			// Dispatch event so CachedMedia can retry loading
-			window.dispatchEvent(new CustomEvent('tmblr-media-cached', { detail: { url } }));
+			window.dispatchEvent(new CustomEvent('postferry-media-cached', { detail: { url } }));
 			pumpQueue();
 			maybeNotifyDrain();
 		} else if (data.type === 'MEDIA_CACHE_ERROR') {
@@ -215,7 +215,7 @@ if (browser && navigator.serviceWorker) {
 				return next;
 			});
 			console.error('Background download failed:', url, error);
-			window.dispatchEvent(new CustomEvent('tmblr-media-error', { detail: { url, error } }));
+			window.dispatchEvent(new CustomEvent('postferry-media-error', { detail: { url, error } }));
 			handleFailure(url, error ?? 'unknown');
 			pumpQueue();
 			maybeNotifyDrain();

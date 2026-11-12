@@ -21,7 +21,7 @@ export interface ParsedAccountsBody {
 	[key: string]: unknown;
 }
 
-export const USER_AGENT = 'tmblr/0.0.1 (+https://github.com/tmblr)';
+export const USER_AGENT = 'postferry-app/0.0.1 (+https://github.com/Bitti09/postferry-app)';
 
 // One client per token set. Constructing clients is cheap, but a busy
 // multi-account session would otherwise rebuild the WebCrypto keys per request.

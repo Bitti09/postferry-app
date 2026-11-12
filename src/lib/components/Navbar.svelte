@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Home, Image, Heart, Users, Search, Maximize, Minimize, Settings, UserCheck, Menu } from '@lucide/svelte';
+	import { Home, Image, Heart, Users, Search, Maximize, Minimize, Settings, UserCheck, Menu, Ship } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 
 	let isFullscreen = $state(false);
@@ -25,8 +25,10 @@
 <div class="navbar bg-gray-900/80 border-b border-gray-800 px-4 md:px-8 sticky top-0 z-40 backdrop-blur-md">
 	<div class="flex-1">
 		<a href="/" class="text-2xl font-black text-white tracking-tighter flex items-center gap-2">
-			<span class="bg-primary text-white w-8 h-8 flex items-center justify-center rounded-lg">T</span>
-			tmblr
+			<span class="bg-primary text-white w-8 h-8 flex items-center justify-center rounded-lg">
+				<Ship size={18} />
+			</span>
+			Postferry
 		</a>
 	</div>
 	<div class="flex-none flex items-center gap-2 pr-2">
@@ -34,7 +36,7 @@
 			<li>
 				<a href="/" class="{page.url.pathname === '/' ? 'active bg-primary' : ''} transition-all">
 					<Home size={18} />
-					<span class="hidden sm:inline">Dashboard</span>
+					<span class="hidden sm:inline">Feed</span>
 				</a>
 			</li>
 			<li>

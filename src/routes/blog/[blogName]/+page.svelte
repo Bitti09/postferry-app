@@ -179,7 +179,7 @@
 
 <div class="min-h-dvh p-4 md:p-8 bg-black">
 	<a href="/" class="btn btn-ghost mb-6 gap-2 text-white">
-		<ArrowLeft size={20} /> Back to Dashboard
+		<ArrowLeft size={20} /> Back to Feed
 	</a>
 
 	{#if feed.error && (typeof navigator === 'undefined' || navigator.onLine)}

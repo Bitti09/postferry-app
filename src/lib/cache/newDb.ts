@@ -166,6 +166,8 @@ export class TmblrCacheDB extends Dexie {
 
 /* ── one-time move of the origin database into the persistent bucket ────── */
 
+// Legacy internal database name; kept so existing users keep their cached
+// posts. It is not user-facing branding.
 const DB_NAME = 'tmblr-cache-new';
 const MIGRATED_FLAG = 'offline-bucket-db-migrated-v1';
 

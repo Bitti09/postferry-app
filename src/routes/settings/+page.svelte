@@ -53,7 +53,7 @@
 <svelte:window bind:innerWidth={windowWidth} />
 
 <svelte:head>
-	<title>Settings - tmblr</title>
+	<title>Settings · Postferry</title>
 </svelte:head>
 
 <div class="min-h-dvh bg-black text-white">
@@ -107,7 +107,7 @@
 							<Image size={18} class="text-primary" /> Media Grid Columns
 						</h3>
 						<p class="text-[15px] text-gray-400 mt-2 leading-relaxed">
-							Controls the number of columns on post grids: Dashboard, Favourites, Search, Caches, and individual blog feeds. "Auto" scales with your screen width.
+							Controls the number of columns on post grids: Feed, Favourites, Search, Caches, and individual blog feeds. "Auto" scales with your screen width.
 						</p>
 					</div>
 					
