@@ -200,6 +200,16 @@ this project's name or branding to suggest an official Tumblr product.
 
 ## License
 
-The application code in this repository has not declared a license yet. The
-separate `postferry` package is MIT-licensed; see its repository for the
-package license and the note about Tumblr content and trademarks.
+Copyright (C) 2026 Bitti09.
+
+This application is licensed under the **GNU Affero General Public License,
+version 3 only** (`AGPL-3.0-only`). The full text is in [LICENSE](./LICENSE).
+
+The AGPL treats network use as distribution: if you run a modified version and
+let other people interact with it over a network, you must offer those users
+the corresponding source code under the AGPL. If you deploy this app publicly,
+make the source available from the deployed version or alongside it.
+
+The separate [`postferry`](https://github.com/Bitti09/postferry) package remains
+MIT-licensed and is compatible with this application's AGPL license. Its
+copyright and license notices must be preserved when redistributing the app.
