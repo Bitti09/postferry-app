@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { onMount } from "svelte";
 	import { dev } from "$app/env";
 	import { page } from "$app/state";
@@ -72,7 +73,7 @@
 			const MAX_NOTE_PAGES = 5;
 			for (let page = 0; page < MAX_NOTE_PAGES; page++) {
 				if (!cursor) break;
-				const res = await fetch(`/api/posts/detail`, {
+				const res = await fetchWithTimeout(`/api/posts/detail`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
@@ -165,7 +166,7 @@
 			// One request: the server fans out to every active account, merges
 			// per-account liked/reblogged state, and returns the post plus the
 			// first page of notes.
-			const response = await fetch('/api/posts/detail', {
+			const response = await fetchWithTimeout('/api/posts/detail', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ accounts: activeAccs, blogName, postId })
@@ -297,7 +298,7 @@ async function loadOfflinePost() {
 		const action = currentlyLiked ? "unlike" : "like";
 		likingAccount = account.blogName;
 		try {
-			const res = await fetch("/api/posts/like", {
+			const res = await fetchWithTimeout("/api/posts/like", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -320,7 +321,7 @@ async function loadOfflinePost() {
 		if (rebloggingAccount || rebloggedAccounts[account.blogName]) return;
 		rebloggingAccount = account.blogName;
 		try {
-			const res = await fetch("/api/posts/reblog", {
+			const res = await fetchWithTimeout("/api/posts/reblog", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -358,7 +359,7 @@ async function loadOfflinePost() {
 		if (activeAccs.length === 0) return;
 		notesLoading = true;
 		try {
-			const res = await fetch(`/api/posts/detail`, {
+			const res = await fetchWithTimeout(`/api/posts/detail`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -454,12 +455,12 @@ async function loadOfflinePost() {
 			};
 
 			const [resNpf, resLegacy] = await Promise.all([
-				fetch('/api/posts/detail', {
+				fetchWithTimeout('/api/posts/detail', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ ...payloadBase, npf: true })
 				}),
-				fetch('/api/posts/detail', {
+				fetchWithTimeout('/api/posts/detail', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ ...payloadBase, npf: false })

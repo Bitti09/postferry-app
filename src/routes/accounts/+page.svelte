@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { onMount } from 'svelte';
 	import { accounts } from '#lib/stores/accounts';
 	import { Heart, User, RefreshCw, CheckCircle2, Circle, Download, Loader2 } from '@lucide/svelte';
@@ -27,7 +28,7 @@
 		try {
 			// Single multi-account round trip: the route returns one result per
 			// account, in request order, with per-account error isolation.
-			const res = await fetch('/api/user/info', {
+			const res = await fetchWithTimeout('/api/user/info', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ accounts: $accounts })
@@ -66,7 +67,7 @@
 		
 		try {
 			while (true) {
-				const res = await fetch('/api/blog/likes', {
+				const res = await fetchWithTimeout('/api/blog/likes', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ accounts: [account], blogName: account.blogName, before: beforeTimestamp })

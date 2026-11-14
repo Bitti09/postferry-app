@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { browser } from '$app/env';
 	import { page } from '$app/state';
 	import { onMount, onDestroy, untrack } from 'svelte';
@@ -47,7 +48,7 @@
 			if (!activeAccount) return { items: [] };
 			if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Offline');
 
-			const response = await fetch('/api/blog/posts', {
+			const response = await fetchWithTimeout('/api/blog/posts', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				signal,
@@ -105,7 +106,7 @@
 		}
 
 		try {
-			const response = await fetch('/api/blog/info', {
+			const response = await fetchWithTimeout('/api/blog/info', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ accounts: [activeAccount], blogName })
@@ -229,10 +230,10 @@
 	{/if}
 
 	<!-- Posts Grid -->
-	<div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between mb-6">
+	<div class="flex flex-col items-center gap-4 mb-6">
 		<h2 class="text-2xl font-bold text-white">Recent Posts</h2>
-		<div class="flex items-center gap-2 flex-wrap">
-			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-start">
+		<div class="flex items-center gap-2 flex-wrap justify-center">
+			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 				{#each FILTERS as f}
 					{@const Icon = f.icon}
 					<button

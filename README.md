@@ -82,12 +82,14 @@ pnpm dev
 # open http://localhost:5173
 ```
 
-If you develop through a tunnel or a custom hostname, allow it explicitly
-instead of hard-coding it in `vite.config.ts`:
+If you develop through a tunnel or a custom hostname, put the allowed hosts in
+your environment or `.env`:
 
 ```sh
-VITE_ALLOWED_HOSTS=your-tunnel.example.com pnpm dev
+VITE_ALLOWED_HOSTS=your-tunnel.example.com
 ```
+
+`vite.config.ts` reads this value; it is never hard-coded there.
 
 Then use **Add Account** on the feed to complete the OAuth flow.
 

@@ -1,3 +1,4 @@
+	import { fetchWithTimeout } from '#lib/http';
 import { browser } from '$app/env';
 import { db } from './newDb';
 import type { TumblrAccount, TumblrUser, TumblrBlog } from '#lib/types';
@@ -77,7 +78,7 @@ export async function getCachedAvatar(blogName: string, size: number = 512): Pro
 		await new Promise((r) => setTimeout(r, Math.random() * 400));
 		// Avatars go through the app's same-origin proxy, which uses the
 		// postferry client; the browser never calls Tumblr directly.
-		const response = await fetch(`/api/avatar?blog=${encodeURIComponent(blogName)}&size=${size}`);
+		const response = await fetchWithTimeout(`/api/avatar?blog=${encodeURIComponent(blogName)}&size=${size}`);
 		if (response.status === 429) {
 			console.warn(`[Rate Limit] Avatar fetch for ${blogName} hit 429. Using fallback.`);
 			if (best) {

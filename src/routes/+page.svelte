@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { snapshot } from '$app/navigation';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/env';
@@ -144,7 +145,7 @@
 		}
 
 		try {
-			const response = await fetch('/api/posts/dashboard', {
+			const response = await fetchWithTimeout('/api/posts/dashboard', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				signal: controller.signal,
@@ -419,8 +420,8 @@
 				</button>
 			</div>
 
-			<div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 justify-between">
-				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto w-full sm:w-auto max-w-full hide-scrollbar justify-start">
+			<div class="flex flex-col items-center gap-3">
+				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 					{#each FILTERS as filter}
 						{@const Icon = filter.icon}
 						<button
@@ -434,7 +435,7 @@
 					{/each}
 				</div>
 
-				<div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+				<div class="flex flex-wrap items-center justify-center gap-2">
 					<button
 						class="btn btn-sm btn-outline gap-1 border-gray-600 hover:bg-gray-800 text-gray-300"
 						onclick={() => void refreshFeed()}

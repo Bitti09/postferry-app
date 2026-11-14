@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { browser } from '$app/env';
 	import { page } from '$app/state';
 	import { onMount, onDestroy, untrack } from 'svelte';
@@ -44,7 +45,7 @@
 			if (!activeAccount) return { items: [] };
 			if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Offline');
 
-			const response = await fetch('/api/blog/likes', {
+			const response = await fetchWithTimeout('/api/blog/likes', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				signal,
@@ -138,8 +139,8 @@
 			<p class="text-gray-400 mt-1">Explore what this blog has favorited.</p>
 		</div>
 
-		<div class="flex items-center gap-2 flex-wrap">
-			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-start">
+		<div class="flex items-center gap-2 flex-wrap justify-center">
+			<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 				{#each FILTERS as f}
 					{@const Icon = f.icon}
 					<button

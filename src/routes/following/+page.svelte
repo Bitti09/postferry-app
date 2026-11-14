@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { onMount, untrack } from 'svelte';
 	import { browser } from '$app/env';
 	import { accounts } from '#lib/stores/accounts';
@@ -127,7 +128,7 @@
 				.filter(b => b.share_likes !== undefined)
 				.map(b => b.name);
 
-			const res = await fetch('/api/user/following', {
+			const res = await fetchWithTimeout('/api/user/following', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({

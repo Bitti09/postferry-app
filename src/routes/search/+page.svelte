@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fetchWithTimeout } from '#lib/http';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { browser } from '$app/env';
 	import { page } from '$app/state';
@@ -49,7 +50,7 @@
 			if (!activeAccount || !submittedQuery) return { items: [] };
 			if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Offline');
 
-			const response = await fetch('/api/search', {
+			const response = await fetchWithTimeout('/api/search', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				signal,
@@ -215,8 +216,8 @@
 				{/each}
 			</div>
 
-			<div class="flex items-center gap-4">
-				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-start">
+			<div class="flex flex-wrap items-center justify-center gap-4">
+				<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 					{#each FILTERS as f}
 						{@const Icon = f.icon}
 						<button

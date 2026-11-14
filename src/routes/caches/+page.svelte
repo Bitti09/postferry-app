@@ -246,8 +246,8 @@
 			</div>
 
 			{#if total > 0}
-				<div class="flex flex-col sm:flex-row items-end sm:items-center gap-4 w-full max-w-full">
-					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto w-full sm:w-auto max-w-full hide-scrollbar justify-start">
+				<div class="flex flex-col items-center gap-3 w-full max-w-full">
+					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 						{#each SOURCE_FILTERS as sf}
 							{@const Icon = sf.icon}
 							<button
@@ -260,7 +260,7 @@
 							</button>
 						{/each}
 					</div>
-					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto w-full sm:w-auto max-w-full hide-scrollbar justify-start">
+					<div class="tabs tabs-boxed bg-gray-900 border border-gray-800 p-1 flex-nowrap overflow-x-auto max-w-full hide-scrollbar justify-center mx-auto">
 						{#each FILTERS as f}
 							{@const Icon = f.icon}
 							<button
@@ -273,7 +273,7 @@
 							</button>
 						{/each}
 					</div>
-					<div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+					<div class="flex items-center gap-2 justify-center">
 						<button
 							class="btn btn-sm btn-outline gap-1 border-gray-600 hover:bg-gray-800 text-gray-300 flex-1 sm:flex-none"
 							onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
