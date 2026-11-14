@@ -546,5 +546,5 @@
 	startPostId={slideshowStartPostId}
 	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredPosts}
-	onReachEnd={async () => { await loadFeed(activeBlog); }}
+	onReachEnd={async () => { await loadFeed(activeBlog); return activeFeed.hasMore; }}
 />

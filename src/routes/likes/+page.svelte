@@ -439,5 +439,5 @@
 	startPostId={slideshowStartPostId}
 	startMediaUrl={slideshowStartMediaUrl}
 	posts={filteredLikes}
-	onReachEnd={async () => { if (activeBlog) await loadLikes(activeBlog); }}
+	onReachEnd={async () => { if (activeBlog) await loadLikes(activeBlog); return activeFeed.hasMore; }}
 />

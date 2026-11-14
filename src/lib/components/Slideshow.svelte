@@ -26,14 +26,15 @@
 	let {
 		active = $bindable(false),
 		posts = [],
-		onReachEnd = async () => {},
+		onReachEnd = async () => undefined,
 		activePostId = $bindable<string | number | null>(null),
 		startPostId = null,
 		startMediaUrl = null
 	}: {
 		active?: boolean,
 		posts: any[],
-		onReachEnd?: () => Promise<void>,
+		/** Return false when the feed has nothing left, to stop prefetching. */
+		onReachEnd?: () => Promise<boolean | void>,
 		activePostId?: string | number | null,
 		startPostId?: string | number | null,
 		startMediaUrl?: string | null
@@ -62,6 +63,8 @@
 			flatMedia.push(...newPosts.flatMap(extractMedia));
 			postCount = nextPostIds.length;
 			previousPostIds = nextPostIds;
+			noProgressRounds = 0;
+			prefetchExhausted = false;
 			return;
 		}
 
@@ -74,6 +77,8 @@
 			flatMedia = posts.flatMap(extractMedia);
 			postCount = nextPostIds.length;
 			previousPostIds = nextPostIds;
+			noProgressRounds = 0;
+			prefetchExhausted = false;
 		}
 	});
 
@@ -228,16 +233,31 @@
 		active = false;
 	}
 
+	let prefetchExhausted = $state(false);
+	let noProgressRounds = 0;
+
 	async function checkPrefetch() {
+		// Without this guard, an onReachEnd() that resolves without adding
+		// media (e.g. the feed hasMore=false and loadFeed returns instantly)
+		// re-fires this effect in a tight microtask loop and freezes the tab.
+		if (prefetchExhausted) return;
 		if (currentIndex >= flatMedia.length - 5 && !isFetchingMore) {
 			isFetchingMore = true;
 			loadCount++;
+			const before = flatMedia.length;
+			let canContinue: boolean | void = true;
 			try {
-				await onReachEnd();
+				canContinue = await onReachEnd();
 			} catch (e) {
 				console.error('Prefetch failed:', e);
 			} finally {
 				isFetchingMore = false;
+				if (flatMedia.length > before) {
+					noProgressRounds = 0;
+				} else {
+					noProgressRounds++;
+					if (canContinue === false || noProgressRounds >= 2) prefetchExhausted = true;
+				}
 			}
 		}
 	}
