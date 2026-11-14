@@ -335,7 +335,7 @@
 					{#each FILTERS as filter}
 						{@const Icon = filter.icon}
 						<button
-							class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+							class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-sm font-normal {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => { currentFilter = filter.value; }}
 							title={filter.label}
 						>

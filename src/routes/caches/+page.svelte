@@ -251,7 +251,7 @@
 						{#each SOURCE_FILTERS as sf}
 							{@const Icon = sf.icon}
 							<button
-								class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentSourceFilter === sf.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+								class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-sm font-normal {currentSourceFilter === sf.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 								onclick={() => { currentSourceFilter = sf.value; }}
 								title={sf.label}
 							>
@@ -264,7 +264,7 @@
 						{#each FILTERS as f}
 							{@const Icon = f.icon}
 							<button
-								class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+								class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-sm font-normal {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 								onclick={() => { currentFilter = f.value; }}
 								title={f.label}
 							>
