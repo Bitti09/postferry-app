@@ -39,15 +39,28 @@ export function matchesFilter(post: TumblrPost, filter: import('./types').PostFi
 		if (post.type === filter) return true;
 	}
 
-	if (filter === 'photo') return postHasBlockType(post, 'image');
-	if (filter === 'video') return postHasBlockType(post, 'video');
-	if (filter === 'audio') return postHasBlockType(post, 'audio');
-	if (filter === 'link') return postHasBlockType(post, 'link');
-	if (filter === 'quote') return postHasBlockSubtype(post, 'quote');
-	if (filter === 'chat') return postHasBlockSubtype(post, 'chat');
-	if (filter === 'answer') return postHasAskLayout(post);
+	if (filter === 'photo') return postHasBlockType(post, 'image') || post.type === 'photo';
+	if (filter === 'video') return postHasBlockType(post, 'video') || post.type === 'video';
+	if (filter === 'audio') return postHasBlockType(post, 'audio') || post.type === 'audio';
+	if (filter === 'link') return postHasBlockType(post, 'link') || post.type === 'link';
+	if (filter === 'quote') return postHasBlockSubtype(post, 'quote') || post.type === 'quote';
+	if (filter === 'chat') return postHasBlockSubtype(post, 'chat') || post.type === 'chat';
+	if (filter === 'answer') return postHasAskLayout(post) || post.type === 'answer';
+	if (filter === 'text') {
+		// NPF posts may report type 'blocks'; match text content instead of
+		// only the legacy post.type value.
+		return (
+			post.type === 'text' ||
+			postHasBlockType(post, 'text') ||
+			(!postHasBlockType(post, 'image') &&
+				!postHasBlockType(post, 'video') &&
+				!postHasBlockType(post, 'audio') &&
+				!postHasBlockType(post, 'link'))
+		);
+	}
 
-	return post.type === filter;
+	// PostType has no 'image' member; anything else is a direct type match.
+	return filter !== 'image' && post.type === (filter as never);
 }
 
 /**

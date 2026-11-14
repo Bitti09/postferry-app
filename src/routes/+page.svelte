@@ -8,6 +8,7 @@
 	import { bulkSetPosts } from '#lib/cache';
 	import { refreshUnreferencedPosts } from '#lib/stores/unreferencedPosts';
 	import { cacheAllVisible } from '#lib/cacheUtils';
+	import { filterPosts, type PostFilter } from '#lib/postFilter';
 	import PostGrid from '#lib/components/PostGrid.svelte';
 	import InfiniteScroll from '#lib/components/InfiniteScroll.svelte';
 	import Slideshow from '#lib/components/Slideshow.svelte';
@@ -33,7 +34,7 @@
 		Settings
 	} from '@lucide/svelte';
 
-	const FILTERS: { value: string; label: string; icon: any }[] = [
+	const FILTERS: { value: PostFilter; label: string; icon: any }[] = [
 		{ value: 'all', label: 'All', icon: Layers },
 		{ value: 'photo', label: 'Photos', icon: ImageIcon },
 		{ value: 'video', label: 'Videos', icon: Video },
@@ -69,7 +70,7 @@
 		};
 	}
 
-	let currentFilter = $state('all');
+	let currentFilter = $state<PostFilter>('all');
 	let isOffline = $state(false);
 	let downloadingAll = $state(false);
 	let downloadProgress = $state({ done: 0, total: 0 });
@@ -84,8 +85,10 @@
 	let tabStrip = $state<HTMLElement | null>(null);
 
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((account) => account.active));
-	let activeFeed = $derived(feeds[activeBlog] ?? emptyFeed());
+	const EMPTY_FEED = emptyFeed();
+	let activeFeed = $derived(feeds[activeBlog] ?? EMPTY_FEED);
 	let activePosts = $derived(activeFeed.posts);
+	let filteredPosts = $derived(filterPosts(activePosts, currentFilter));
 	let loadingActive = $derived(activeFeed.loading);
 
 	const generations = new Map<string, number>();
@@ -98,16 +101,17 @@
 	}
 
 	function feedKey(): string {
-		return `${activeAccounts.map((account) => account.blogName).sort().join('|')}|${currentFilter}`;
+		// The post type filter is applied client-side and deliberately not part
+		// of this key: switching filters must not wipe and refetch the feed.
+		return activeAccounts.map((account) => account.blogName).sort().join('|');
 	}
 
 	function ensureFeed(blogName: string): FeedState {
-		let feed = feeds[blogName];
-		if (!feed) {
-			feed = emptyFeed();
-			feeds[blogName] = feed;
-		}
-		return feed;
+		if (!feeds[blogName]) feeds[blogName] = emptyFeed();
+		// Return the $state proxy, never the raw object we just inserted.
+		// Mutating a raw object would bypass Svelte reactivity and the page
+		// would keep rendering stale loading/error/post state.
+		return feeds[blogName]!;
 	}
 
 	async function loadFeed(
@@ -152,8 +156,7 @@
 				body: JSON.stringify({
 					accounts: [account],
 					offsets: !options.topUp && feed.cursor !== null ? { [blogName]: feed.cursor } : {},
-					since_ids: options.topUp && feed.since ? { [blogName]: feed.since } : {},
-					type: currentFilter === 'all' ? null : currentFilter
+					since_ids: options.topUp && feed.since ? { [blogName]: feed.since } : {}
 				})
 			});
 			if (!response.ok) throw new Error(`Failed to load posts (${response.status})`);
@@ -259,10 +262,9 @@
 			if (!value) return;
 			activeBlog = value.activeBlog ?? '';
 			currentFilter = value.filter ?? 'all';
-			feeds = value.feeds ?? {};
-			for (const feed of Object.values(feeds)) {
-				feed.loading = false;
-				feed.error = '';
+			feeds = {};
+			for (const [blogName, restoredFeed] of Object.entries(value.feeds ?? {}) as [string, FeedState][]) {
+				feeds[blogName] = { ...restoredFeed, loading: false, error: '' };
 			}
 			restored = true;
 		}
@@ -278,7 +280,7 @@
 	async function startCacheAll(): Promise<void> {
 		if (downloadingAll) return;
 		downloadingAll = true;
-		await cacheAllVisible(activePosts, (progress) => {
+		await cacheAllVisible(filteredPosts, (progress) => {
 			downloadProgress = progress;
 		});
 		downloadingAll = false;
@@ -425,12 +427,12 @@
 					{#each FILTERS as filter}
 						{@const Icon = filter.icon}
 						<button
-							class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+							class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => { currentFilter = filter.value; }}
 							title={filter.label}
 						>
 							<Icon size={14} />
-							<span class="hidden sm:inline">{filter.label}</span>
+							<span>{filter.label}</span>
 						</button>
 					{/each}
 				</div>
@@ -447,7 +449,7 @@
 					<button
 						class="btn btn-sm btn-outline gap-1 border-gray-600 hover:bg-gray-800 text-gray-300 flex-1 sm:flex-none"
 						onclick={() => { slideshowStartPostId = null; slideshowStartMediaUrl = null; slideshowActive = true; }}
-						disabled={activePosts.length === 0}
+						disabled={filteredPosts.length === 0}
 					>
 						<Play size={16} /> <span class="hidden sm:inline">Play Slideshow</span><span class="sm:hidden">Play</span>
 					</button>
@@ -508,18 +510,22 @@
 			</div>
 		{/if}
 
-		{#if activeFeed.loading && activePosts.length === 0}
+		{#if (activeFeed.loading || !activeFeed.loaded) && activePosts.length === 0}
 			<div class="flex justify-center py-20">
 				<span class="loading loading-spinner loading-lg text-primary"></span>
 			</div>
-		{:else if activeFeed.loaded && activePosts.length === 0}
+		{:else if activeFeed.loaded && filteredPosts.length === 0}
 			<div class="py-20 text-center text-gray-500">
-				No posts in this account’s feed.
+				{#if currentFilter === 'all'}
+					No posts in this account’s feed.
+				{:else}
+					No posts match the current filter.
+				{/if}
 			</div>
 		{:else}
 			<main>
 				<PostGrid
-					posts={activePosts}
+					posts={filteredPosts}
 					columnSetting={$settings.mediaColumns}
 					onMediaClick={openSlideshowFromPost}
 				/>
@@ -539,6 +545,6 @@
 	bind:activePostId={activeSlideshowPostId}
 	startPostId={slideshowStartPostId}
 	startMediaUrl={slideshowStartMediaUrl}
-	posts={activePosts}
+	posts={filteredPosts}
 	onReachEnd={async () => { await loadFeed(activeBlog); }}
 />

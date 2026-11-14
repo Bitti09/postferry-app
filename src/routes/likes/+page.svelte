@@ -73,7 +73,8 @@
 	let downloadProgress = $state({ done: 0, total: 0 });
 
 	let activeAccounts = $derived<TumblrAccount[]>($accounts.filter((account) => account.active));
-	let activeFeed = $derived(feeds[activeBlog] ?? emptyFeed());
+	const EMPTY_FEED = emptyFeed();
+	let activeFeed = $derived(feeds[activeBlog] ?? EMPTY_FEED);
 	let activePosts = $derived(activeFeed.posts);
 	let filteredLikes = $derived(filterPosts(activePosts, currentFilter));
 	let loading = $derived(activeFeed.loading);
@@ -92,12 +93,11 @@
 	}
 
 	function ensureFeed(blogName: string): LikesFeed {
-		let feed = feeds[blogName];
-		if (!feed) {
-			feed = emptyFeed();
-			feeds[blogName] = feed;
-		}
-		return feed;
+		if (!feeds[blogName]) feeds[blogName] = emptyFeed();
+		// Return the $state proxy, never the raw object we just inserted.
+		// Mutating a raw object would bypass Svelte reactivity and the page
+		// would keep rendering stale loading/error/post state.
+		return feeds[blogName]!;
 	}
 
 	async function loadLikes(
@@ -226,10 +226,9 @@
 			if (!value) return;
 			activeBlog = value.activeBlog ?? '';
 			currentFilter = value.filter ?? 'all';
-			feeds = value.feeds ?? {};
-			for (const feed of Object.values(feeds)) {
-				feed.loading = false;
-				feed.error = '';
+			feeds = {};
+			for (const [blogName, restoredFeed] of Object.entries(value.feeds ?? {}) as [string, LikesFeed][]) {
+				feeds[blogName] = { ...restoredFeed, loading: false, error: '' };
 			}
 			restored = true;
 		}
@@ -336,12 +335,12 @@
 					{#each FILTERS as filter}
 						{@const Icon = filter.icon}
 						<button
-							class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+							class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentFilter === filter.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 							onclick={() => { currentFilter = filter.value; }}
 							title={filter.label}
 						>
 							<Icon size={14} />
-							<span class="hidden sm:inline">{filter.label}</span>
+							<span>{filter.label}</span>
 						</button>
 					{/each}
 				</div>
@@ -402,13 +401,21 @@
 			<div class="alert alert-error mb-6">{activeFeed.error}</div>
 		{/if}
 
-		{#if filteredLikes.length === 0 && !loading && activeFeed.loaded}
-			<div class="py-20 flex-1 flex items-center justify-center text-gray-500">
-				No favourited posts match the current filter.
-			</div>
-		{:else if activeFeed.loading && activePosts.length === 0}
+		{#if activeFeed.loading && activePosts.length === 0}
 			<div class="flex-1 flex items-center justify-center">
 				<span class="loading loading-spinner loading-lg text-primary"></span>
+			</div>
+		{:else if !activeFeed.loaded && !activeFeed.error}
+			<div class="flex-1 flex items-center justify-center">
+				<span class="loading loading-spinner loading-lg text-primary"></span>
+			</div>
+		{:else if filteredLikes.length === 0}
+			<div class="py-20 flex-1 flex items-center justify-center text-gray-500">
+				{#if currentFilter === 'all'}
+					No favourited posts in this account yet.
+				{:else}
+					No favourited posts match the current filter.
+				{/if}
 			</div>
 		{:else}
 			<div bind:this={likesScrollContainer} class="flex-1 overflow-y-auto pr-2 pb-20">

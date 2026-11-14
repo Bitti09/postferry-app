@@ -144,12 +144,12 @@
 				{#each FILTERS as f}
 					{@const Icon = f.icon}
 					<button
-						class="tab flex-1 whitespace-nowrap flex items-center justify-center gap-2 {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
+						class="tab whitespace-nowrap flex items-center justify-center gap-2 px-5 py-3 text-lg {currentFilter === f.value ? 'tab-active bg-primary text-white' : 'text-gray-400'}"
 						onclick={() => { currentFilter = f.value; }}
 						title={f.label}
 					>
 						<Icon size={14} />
-						<span class="hidden sm:inline">{f.label}</span>
+						<span>{f.label}</span>
 					</button>
 				{/each}
 			</div>
